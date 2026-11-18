@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# logs and SolidWorks temporary / lock files
+*.log
+~$*

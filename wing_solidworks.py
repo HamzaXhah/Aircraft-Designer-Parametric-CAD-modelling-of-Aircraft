@@ -81,7 +81,7 @@ class WingParams:
     dihedral_deg: float = 3.0      # dihedral angle [deg]
     twist_deg: float = -2.0        # tip twist relative to root [deg] (negative = washout)
     twist_axis: float = 0.25       # chord fraction about which sections are twisted
-    n_stations: int = 10            # number of loft sections root -> tip (>= 2)
+    n_stations: int = 4            # number of loft sections root -> tip (>= 2)
     airfoil_file: str = ""         # Selig/Lednicer .dat; empty -> NACA below
     naca: str = "2412"             # fallback NACA 4-digit section
     n_points_per_surface: int = 0  # 0 = use file points as-is; >0 = cosine resample
@@ -366,9 +366,14 @@ class SolidWorksWingBuilder:
             raise RuntimeError(
                 "No default part template set. In SolidWorks: Tools > Options > "
                 "Default Templates.")
-        self.model = self.app.NewDocument(template, 0, 0, 0)
-        if self.model is None:
+        model = self.app.NewDocument(template, 0, 0, 0)
+        if model is None:
             raise RuntimeError("SolidWorks failed to create a new part.")
+        self.attach(model)
+
+    def attach(self, model):
+        """Work in an existing part (used by aircraft_sw.py)."""
+        self.model = model
         self.ext = self.model.Extension
         self.fm = self.model.FeatureManager
         self.skm = self.model.SketchManager
@@ -504,8 +509,8 @@ class SolidWorksWingBuilder:
             for i, sec in enumerate(sections):
                 print(f"  station {i}: z = {sec.z:8.2f} mm, c = {sec.chord:8.2f} mm, "
                       f"twist = {sec.twist_deg:+.2f} deg")
-                plane = self.front if i == 0 else self.offset_plane(sec.z, f"Station_{i}")
-                names.append(self.sketch_section(plane, sec, f"Section_{i}"))
+                plane = self.front if i == 0 else self.offset_plane(sec.z, f"Wing_Station_{i}")
+                names.append(self.sketch_section(plane, sec, f"Wing_Section_{i}"))
             print("  lofting ...")
             self.loft(names, sections)
             if p.mirror:
