@@ -32,6 +32,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
+import ctypes
 import glob
 import hashlib
 import io
@@ -45,6 +46,7 @@ import sys
 import tempfile
 import threading
 import tkinter as tk
+import types
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -63,6 +65,46 @@ import aircraft_sw as A
 import aircraft_sweep as S
 import fuselage_sw as F
 import tail_sw as T
+
+
+def _tune_customtkinter():
+    """Remove CustomTkinter's forced idle flushes.
+
+    CTkScrollbar._draw and CTkOptionMenu._draw end with canvas.update_idletasks(),
+    and every widget's appearance-mode handler with update_idletasks(). In Tk that
+    call is not local to the widget: it runs *all* pending layout and redraw work of
+    the whole application, synchronously. A scrollbar redraws on every scroll step
+    and every layout change, so scrolling and resizing re-laid-out and repainted the
+    window several times per step, and a light / dark switch did it once per widget.
+    Tk performs exactly the same work once in its normal idle pass right after the
+    event, so the flushes only cost time."""
+    try:
+        from customtkinter.windows.widgets.core_widget_classes.ctk_base_class import (
+            CTkBaseClass)
+    except ImportError:                                   # other CTk layout: leave it
+        return
+
+    def skip_canvas_flush(cls):
+        draw = cls._draw
+
+        def _draw(self, no_color_updates=False):
+            canvas = self._canvas
+            if "update_idletasks" not in vars(canvas):    # this canvas only
+                canvas.update_idletasks = lambda: None
+            draw(self, no_color_updates)
+        cls._draw = _draw
+
+    for cls in (ctk.CTkScrollbar, ctk.CTkOptionMenu):
+        if hasattr(cls, "_draw"):
+            skip_canvas_flush(cls)
+
+    def _set_appearance_mode(self, mode_string):
+        super(CTkBaseClass, self)._set_appearance_mode(mode_string)
+        self._draw()
+    CTkBaseClass._set_appearance_mode = _set_appearance_mode
+
+
+_tune_customtkinter()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_NAME = "Aircraft Designer"
@@ -594,6 +636,73 @@ class LiteLabel(tk.Label):
         super().destroy()
 
 
+class LiteFrame(tk.Frame):
+    """Plain Tk frame for pure layout containers that behaves like a transparent
+    CTkFrame: it follows CTk's light / dark mode and scales its grid padding.
+
+    A transparent CTkFrame is a frame plus a full-size canvas that CTk redraws on
+    every resize; for the page area and the containers inside each parameter row
+    (row, controls, formula) that was the largest single cost of resizing a page."""
+
+    def __init__(self, master, bg=CARD, **kw):
+        super().__init__(master, bd=0, highlightthickness=0, **kw)
+        self._bg = bg
+        self._mode = 1 if ctk.get_appearance_mode() == "Dark" else 0
+        self._scale = ctk.ScalingTracker.get_widget_scaling(master)
+        self._grid_kw = {}
+        ctk.AppearanceModeTracker.add(self._on_mode, self)
+        ctk.ScalingTracker.add_widget(self._on_scale, self)
+        self._apply()
+
+    def cget(self, key):
+        # CTk widgets read the colour of a plain Tk parent with cget("bg"); return the
+        # (light, dark) pair so they follow mode switches as with a CTk parent
+        if key in ("bg", "background"):
+            return self._bg
+        return super().cget(key)
+
+    __getitem__ = cget
+
+    def _apply(self):
+        bg = self._bg[self._mode] if isinstance(self._bg, (tuple, list)) else self._bg
+        super().configure(bg=bg)
+
+    def _scaled(self, kw):
+        def px(v):
+            return tuple(round(x * self._scale) for x in v) if isinstance(v, tuple) \
+                else round(v * self._scale)
+        return {k: px(v) if k in ("padx", "pady", "ipadx", "ipady") else v
+                for k, v in kw.items()}
+
+    def grid(self, cnf=None, **kw):
+        """Like CTk widgets: padding in logical px, scaled with the UI / DPI scale."""
+        kw.update(cnf or {})
+        if kw:
+            self._grid_kw = kw
+            super().grid_configure(**self._scaled(kw))
+        else:                                       # re-show after grid_remove()
+            super().grid_configure()
+
+    grid_configure = grid
+
+    def _on_mode(self, mode):
+        m = 1 if mode == "Dark" else 0
+        if m != self._mode:
+            self._mode = m
+            self._apply()
+
+    def _on_scale(self, widget_scaling, _window_scaling):
+        if widget_scaling != self._scale:
+            self._scale = widget_scaling
+            if self._grid_kw and self.winfo_manager() == "grid":
+                super().grid_configure(**self._scaled(self._grid_kw))
+
+    def destroy(self):
+        ctk.AppearanceModeTracker.remove(self._on_mode)
+        ctk.ScalingTracker.remove_widget(self._on_scale, self)
+        super().destroy()
+
+
 dump_config = A.dump_config
 
 
@@ -626,7 +735,7 @@ class ParamRow:
             self.step = 1 if self.is_int else (10 ** (math.floor(math.log10(span)) - 2)
                                                if span > 0 else 0.01)
 
-        f = self.frame = ctk.CTkFrame(parent, fg_color="transparent")
+        f = self.frame = LiteFrame(parent)
         f.grid(row=grid_row, column=0, sticky="ew", padx=12, pady=6)
         f.grid_columnconfigure(1, weight=1)
         self.dot = LiteLabel(f, text="●", font=app.f_small, fg=OK, width=2)
@@ -639,18 +748,18 @@ class ParamRow:
         formula = FORMULAS.get((sec, name))
         if formula:
             tex, legend = formula
-            box = ctk.CTkFrame(f, fg_color="transparent", width=0, height=0)
+            box = LiteFrame(f)
             box.grid(row=2, column=1, sticky="w", pady=(5, 0))
             tex_label(box, f"${tex}$", 14).pack(side="left")
             if legend:
                 tex_label(box, legend_text(legend), 9.5, ("#4b5563", "#9ca3af")).pack(
                     side="left", padx=(18, 0))
-        self.ctrl = ctrl = ctk.CTkFrame(f, fg_color="transparent")
+        self.ctrl = ctrl = LiteFrame(f)
         ctrl.grid(row=0, column=2, rowspan=2, sticky="e", padx=(8, 0))
         self.iter_btn = None
         if self.kind != "file":
             self.iter_btn = ctk.CTkButton(f, text="Iterate", width=62, height=24,
-                                          corner_radius=12, border_width=1,
+                                          corner_radius=12, border_width=1, bg_color=CARD,
                                           font=app.f_tiny, command=self.toggle_iter)
             self.iter_btn.grid(row=0, column=3, rowspan=2, padx=(10, 0))
             Tooltip(self.iter_btn, lambda: (
@@ -674,14 +783,15 @@ class ParamRow:
     def _build_number(self, ctrl):
         app = self.app
         self.slider = ctk.CTkSlider(ctrl, from_=self.lo, to=self.hi, width=160,
-                                    command=self.on_slide,
+                                    command=self.on_slide, bg_color=CARD,
                                     number_of_steps=(int(self.hi - self.lo)
                                                      if self.is_int and self.hi - self.lo <= 400
                                                      else None))
         self.slider.grid(row=0, column=0, padx=(0, 8))
         self.slider.bind("<ButtonPress-1>", lambda _e: app.set_dragging(True), add="+")
         self.slider.bind("<ButtonRelease-1>", lambda _e: app.set_dragging(False), add="+")
-        self.entry = ctk.CTkEntry(ctrl, width=86, justify="right", font=app.f_mono)
+        self.entry = ctk.CTkEntry(ctrl, width=86, justify="right", font=app.f_mono,
+                                  bg_color=CARD)
         self.entry.grid(row=0, column=1)
         self.entry.configure(validate="key",
                              validatecommand=(self.entry.register(self._vcmd_number), "%P"))
@@ -703,6 +813,7 @@ class ParamRow:
         self.to_value = dict(zip(labels, choices))
         self.to_label = dict(zip(choices, labels))
         self.menu = ctk.CTkOptionMenu(ctrl, values=labels, width=230, dynamic_resizing=False,
+                                      bg_color=CARD,
                                       command=lambda lab: self.app.set_value(
                                           self.sec, self.name, self.to_value[lab]))
         self.menu.grid(row=0, column=0)
@@ -710,7 +821,8 @@ class ParamRow:
             row=1, column=0, sticky="w", pady=(3, 0))
 
     def _build_text(self, ctrl):
-        self.entry = ctk.CTkEntry(ctrl, width=86, justify="center", font=self.app.f_mono)
+        self.entry = ctk.CTkEntry(ctrl, width=86, justify="center", font=self.app.f_mono,
+                                  bg_color=CARD)
         self.entry.grid(row=0, column=0)
         self.entry.configure(validate="key", validatecommand=(
             self.entry.register(lambda P: self._quiet or re.fullmatch(r"\d{0,4}", P) is not None),
@@ -725,11 +837,12 @@ class ParamRow:
 
     def _build_file(self, ctrl):
         self.entry = ctk.CTkEntry(ctrl, width=200, placeholder_text="(use NACA section)",
-                                  font=self.app.f_small)
+                                  font=self.app.f_small, bg_color=CARD)
         self.entry.grid(row=0, column=0)
         self.entry.bind("<Return>", self.commit)
         self.entry.bind("<FocusOut>", self.commit)
-        self.browse = ctk.CTkButton(ctrl, text="Browse…", width=74, command=self._browse)
+        self.browse = ctk.CTkButton(ctrl, text="Browse…", width=74, command=self._browse,
+                                    bg_color=CARD)
         self.browse.grid(row=0, column=1, padx=(6, 0))
         LiteLabel(ctrl, text=".dat (Selig / Lednicer) - empty = NACA",
                   font=self.app.f_tiny).grid(row=1, column=0, columnspan=2, sticky="w",
@@ -924,7 +1037,8 @@ class ParamRow:
 
     def _build_iter_panel(self):
         app = self.app
-        p = self.iter_panel = ctk.CTkFrame(self.frame, fg_color=ITER_BG, corner_radius=8)
+        p = self.iter_panel = ctk.CTkFrame(self.frame, fg_color=ITER_BG, corner_radius=8,
+                                           bg_color=CARD)
         p.grid(row=3, column=1, columnspan=4, sticky="ew", pady=(6, 2))
         p.grid_columnconfigure(8, weight=1)
         ctk.CTkLabel(p, text="ITERATE", font=app.f_tiny, text_color=ACCENT).grid(
@@ -1156,6 +1270,13 @@ class ParamRow:
 class AircraftDesigner(ctk.CTk):
     def __init__(self, config_path: str):
         super().__init__()
+        # CTk binds <Configure> on the root window. Tk runs a root binding for the
+        # <Configure> of every child widget too, so each resize step called CTk's
+        # handler (two window-size queries) once per widget - thousands of times.
+        # The class tag of the root window is only on the root itself.
+        self.unbind("<Configure>")
+        self.bind_class(self.winfo_class(), "<Configure>", self._update_dimensions_event,
+                        add="+")
         ctk.set_default_color_theme("blue")
         self.f_title = ctk.CTkFont(size=22, weight="bold")
         self.f_head = ctk.CTkFont(size=14, weight="bold")
@@ -1193,6 +1314,12 @@ class AircraftDesigner(ctk.CTk):
         self._pending = {}                # page key -> generator still building it
         self._prebuild = []               # page keys still to build while idle
         self._prebuild_job = None
+        self._page_wrap = {}              # page key -> description wrap it was laid out with
+        self._host_size = (0, 0)          # latest size of the page area
+        self._repark_job = None           # idle re-layout of hidden pages after a resize
+        self._preview_size = None         # canvas size the preview was last rendered for
+        self._preview_pending = None      # canvas size waiting to be rendered
+        self._preview_resize_job = None
 
         self._build_layout()
         ctk.AppearanceModeTracker.add(self._on_appearance, self)
@@ -1311,7 +1438,9 @@ class AircraftDesigner(ctk.CTk):
                                             text_color=("gray10", "gray90"),
                                             command=self.reset_page)
         self.reset_page_btn.grid(row=0, column=2, rowspan=2)
-        self.page_host = ctk.CTkFrame(main, fg_color="transparent")
+        # plain frame: a transparent CTkFrame would redraw a canvas the size of the
+        # whole page area behind the page on every resize step
+        self.page_host = LiteFrame(main, bg=self._page_bg())
         self.page_host.grid(row=1, column=0, sticky="nsew")
         self.page_host.grid_columnconfigure(0, weight=1)
         self.page_host.grid_rowconfigure(0, weight=1)
@@ -1369,14 +1498,23 @@ class AircraftDesigner(ctk.CTk):
                                           font=self.f_tiny, command=self.clear_design_preview)
         self.fig = Figure(figsize=(4.6, 5.6), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.fig, master=tab)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        tkc = self.canvas.get_tk_widget()
+        tkc.pack(fill="both", expand=True)
+        # matplotlib re-renders the whole figure (~80 ms) on every <Configure> of its
+        # canvas, i.e. many times while the window is resized, maximised or restored.
+        # Replace its handler: render once, when the size has stopped changing.
+        tkc.bind("<Configure>", self._on_preview_configure)
         # axes are created once; each update only swaps the aircraft outlines.
         # Their positions are computed from the aircraft's proportions (see
         # _layout_views) so every view always shows the complete aircraft.
         self.axes = [self.fig.add_axes((0.1, 0.1, 0.8, 0.2)) for _ in range(3)]
         for ax, title in zip(self.axes, ("Top view", "Side view", "Front view")):
             ax.set_aspect("equal", adjustable="datalim")
-            ax.set_title(title, fontsize=9, loc="left")
+            # fixed title and (empty) axis-label positions: otherwise matplotlib
+            # measures every tick label on each draw to place them (~40 % of a draw)
+            ax.set_title(title, fontsize=9, loc="left", y=1.0, pad=4)
+            ax.xaxis.set_label_coords(0.5, -0.1)
+            ax.yaxis.set_label_coords(-0.1, 0.5)
             for s in ax.spines.values():
                 s.set_visible(False)
             ax.set_axisbelow(True)
@@ -1387,6 +1525,35 @@ class AircraftDesigner(ctk.CTk):
         self._caption_state = None
         self._layout_views()
         self.canvas.mpl_connect("resize_event", lambda _e: self._layout_views())
+
+    def _on_preview_configure(self, e):
+        size = (e.width, e.height)
+        if e.width < 2 or e.height < 2:
+            return
+        if self._preview_resize_job is not None:
+            self.after_cancel(self._preview_resize_job)
+            self._preview_resize_job = None
+        if size == self._preview_size:
+            return
+        self._preview_pending = size
+        self._preview_resize_job = self.after(150, self._resize_preview)
+
+    def _resize_preview(self):
+        """Resize the figure to the canvas and render it once, straight away."""
+        if self._mouse_held():                        # still dragging the window edge
+            self._preview_resize_job = self.after(50, self._resize_preview)
+            return
+        self._preview_resize_job = None
+        size = self._preview_size = self._preview_pending
+        tkc = self.canvas.get_tk_widget()
+        self.canvas.resize(types.SimpleNamespace(width=size[0], height=size[1]))
+        # resize() queued an idle draw after blanking the image; draw now instead,
+        # so the blank image is never shown and the figure is rendered only once
+        job = getattr(self.canvas, "_idle_draw_id", None)
+        if job:
+            tkc.after_cancel(job)
+            self.canvas._idle_draw_id = None
+        self.canvas.draw()
 
     def _build_data(self, tab):
         frame = ctk.CTkScrollableFrame(tab, fg_color="transparent")
@@ -1410,20 +1577,50 @@ class AircraftDesigner(ctk.CTk):
         self.derived_box.grid(row=11, column=0, columnspan=2, sticky="ew", padx=4)
 
     # ------------------------------------------------------------------ pages
-    # Pages are stacked in one grid cell and switched with tkraise (no re-layout).
-    # They are filled by generators that yield after every row / card, so the pages
+    # Only the visible page fills the page area; hidden pages are "parked": placed
+    # far outside it at a fixed size. On Windows every Tk widget is a native window,
+    # so the way hidden pages are kept decides what resizing and switching cost:
+    #   * stacked under the visible page (same grid cell) they were resized, laid
+    #     out and repainted with it on every resize, maximise and restore step;
+    #   * unmapped, every switch re-shows and repaints hundreds of native windows.
+    # Parked pages stay mapped (switching is a single move) but lie outside the
+    # window, so they are never painted, and their fixed size means a window resize
+    # does not touch them. A page that was parked at another size is laid out once,
+    # when it is shown.
+    # Pages are filled by generators that yield after every row / card, so the pages
     # the user has not opened yet can be built in small steps while the GUI is idle.
+    PARK_X = -30000
+
     @staticmethod
     def _outer(page):
         return getattr(page, "_parent_frame", page)
+
+    # Tk's own place(): CTk's override refuses width / height, and these are real
+    # pixel sizes of the page area that must not be scaled again.
+    def _park(self, outer):
+        w = max(self.page_host.winfo_width(), 200)
+        h = max(self.page_host.winfo_height(), 200)
+        tk.Place.place_configure(outer, x=self.PARK_X, y=0, width=w, height=h,
+                                 relwidth=0, relheight=0)
+
+    def _unpark(self, outer):
+        """Show a page at the current size of the page area. The size is absolute
+        (not relwidth=1): while the window is being resized the page keeps its
+        layout, and _fit_page re-lays it out once the size has settled."""
+        w = max(self.page_host.winfo_width(), 200)
+        h = max(self.page_host.winfo_height(), 200)
+        tk.Place.place_configure(outer, x=0, y=0, width=w, height=h, relwidth=0, relheight=0)
 
     def show_page(self, key):
         if self.current == key:
             return
         self._finish_page(key)
         page = self.pages[key]
-        tk.Misc.tkraise(self._outer(page))
         prev, self.current = self.current, key
+        self._unpark(self._outer(page))
+        if prev in self.pages:
+            self._park(self._outer(self.pages[prev]))
+        self._apply_wrap_to(key)
         for k in (prev, key):
             if k in self.nav:
                 self.nav[k].configure(fg_color=NAV_SEL if k == key else "transparent")
@@ -1441,12 +1638,16 @@ class AircraftDesigner(ctk.CTk):
             self.refresh_sweep_page()
 
     def _create_page(self, key):
+        # bg_color: the page area is a plain Tk frame (LiteFrame), from which CTk
+        # cannot read the light / dark colour pair itself
         if key == "sweep":                 # holds its own scrolling table
-            page = ctk.CTkFrame(self.page_host, fg_color="transparent")
+            page = ctk.CTkFrame(self.page_host, fg_color="transparent",
+                                bg_color=self._page_bg())
             page.grid_columnconfigure(0, weight=1)
             gen = self._run_once(self._fill_sweep_page, page)
         else:
-            page = ctk.CTkScrollableFrame(self.page_host, fg_color="transparent")
+            page = ctk.CTkScrollableFrame(self.page_host, fg_color="transparent",
+                                          bg_color=self._page_bg())
             page.grid_columnconfigure(0, weight=1)
             if key in PARAM_PAGES:
                 gen = self._fill_param_page(page, key)
@@ -1454,9 +1655,7 @@ class AircraftDesigner(ctk.CTk):
                 gen = self._fill_constraints_page(page)
             else:
                 gen = self._run_once(self._fill_build_page, page)
-        outer = self._outer(page)
-        outer.grid(row=0, column=0, sticky="nsew")
-        tk.Misc.lower(outer)               # stays hidden until shown
+        self._park(self._outer(page))
         self.pages[key] = page
         self._pending[key] = gen
 
@@ -1477,13 +1676,21 @@ class AircraftDesigner(ctk.CTk):
 
     def _page_built(self, key):
         if key in PARAM_PAGES:
+            self._page_wrap.pop(key, None)
+            self._apply_wrap_to(key)
             for (sec, _), row in self.rows.items():
                 if sec == key:
-                    row.desc.style(wraplength=self.desc_wrap)
                     row.set_enabled(self.relevant(sec, row.name))
             self._apply_row_flags()
         elif key == "build":
             self._update_build_buttons(force=True)
+
+    def _repark(self, key):
+        """After a page was pre-built in the background: lay it out at the current
+        page-area size, so showing it later needs no layout pass."""
+        page = self.pages.get(key)
+        if page is not None and key != self.current:
+            self._park(self._outer(page))
 
     def _start_prebuild(self):
         self._prebuild = [k for k, _ in PAGES if k not in self.pages or k in self._pending]
@@ -1507,6 +1714,7 @@ class AircraftDesigner(ctk.CTk):
                 del self._pending[key]
                 self._prebuild.pop(0)
                 self._page_built(key)
+                self._repark(key)
             break
         if self._prebuild:                 # idle-only: user input is always handled first
             self._prebuild_job = self.after(25, self._prebuild_idle)
@@ -1514,22 +1722,85 @@ class AircraftDesigner(ctk.CTk):
     def _prebuild_idle(self):
         self._prebuild_job = self.after_idle(self._prebuild_step)
 
+    @staticmethod
+    def _mouse_held():
+        """True while the primary mouse button is down, e.g. during a window-edge
+        drag. Resize work is postponed until it is released: a pure timer is not
+        enough, because one slow step would let it fire in the middle of the drag."""
+        if sys.platform != "win32":
+            return False
+        try:
+            u32 = ctypes.windll.user32
+            vk = 0x02 if u32.GetSystemMetrics(23) else 0x01     # SM_SWAPBUTTON
+            return bool(u32.GetAsyncKeyState(vk) & 0x8000)
+        except Exception:
+            return False
+
     def _on_host_resize(self, e):
+        # Laying out a page (hundreds of native widgets) on every intermediate size
+        # of a window drag is what made resizing stutter; only the final size matters.
+        self._host_size = (e.width, e.height)
         if self._wrap_job is not None:
             self.after_cancel(self._wrap_job)
-        self._wrap_job = self.after(80, lambda w=e.width: self._apply_wrap(w))
+        self._wrap_job = self.after(60, self._fit_page)
+
+    def _fit_page(self):
+        """Resize the visible page to the page area, once the size has settled."""
+        if self._mouse_held():
+            self._wrap_job = self.after(50, self._fit_page)
+            return
+        self._wrap_job = None
+        width_px, height_px = self._host_size
+        page = self.pages.get(self.current)
+        if page is not None:
+            tk.Place.place_configure(self._outer(page), width=max(width_px, 200),
+                                     height=max(height_px, 200))
+        self._apply_wrap(width_px)
+        if self._repark_job is not None:
+            self.after_cancel(self._repark_job)
+        self._repark_job = self.after(300, self._repark_next)
+
+    def _repark_next(self):
+        """After a window resize: bring one hidden page to the new page-area size
+        (off screen, so it is laid out but not painted), then the next one a little
+        later. Switching to a page then needs no layout pass, and the user is never
+        blocked for more than one page at a time."""
+        self._repark_job = None
+        if self._mouse_held():
+            self._repark_job = self.after(300, self._repark_next)
+            return
+        w = max(self.page_host.winfo_width(), 200)
+        h = max(self.page_host.winfo_height(), 200)
+        for key, page in self.pages.items():
+            if key == self.current or key in self._pending:
+                continue
+            outer = self._outer(page)
+            info = outer.place_info()
+            if int(info.get("width") or 0) != w or int(info.get("height") or 0) != h:
+                self._park(outer)
+                self._apply_wrap_to(key)
+                self._repark_job = self.after(120, self._repark_next)
+                return
 
     def _apply_wrap(self, width_px):
         """Let every description use the free width beside its controls."""
-        self._wrap_job = None
         s = ctk.ScalingTracker.get_widget_scaling(self)
         # row width minus dot, slider + entry + unit, Iterate and reset (~460 px)
         wrap = max(200, int(width_px / s) - 460)
-        if abs(wrap - self.desc_wrap) <= 8:
+        if abs(wrap - self.desc_wrap) > 8:
+            self.desc_wrap = wrap
+        self._apply_wrap_to(self.current)
+
+    def _apply_wrap_to(self, key):
+        """Re-wrap one page's descriptions - only the visible page; hidden pages
+        catch up when they are shown, instead of every page on every resize."""
+        if key not in PARAM_PAGES or key in self._pending \
+                or self._page_wrap.get(key) == self.desc_wrap:
             return
-        self.desc_wrap = wrap
-        for row in self.rows.values():
-            row.desc.style(wraplength=wrap)
+        self._page_wrap[key] = self.desc_wrap
+        for (sec, _), row in self.rows.items():
+            if sec == key:
+                row.desc.style(wraplength=self.desc_wrap)
 
     def _fill_param_page(self, page, sec):
         block = self.raw[sec]
@@ -1814,10 +2085,22 @@ class AircraftDesigner(ctk.CTk):
             return
         sw = self.sweep_block()
         variables, settings, errors = S.parse_sweep(self.raw)
+        items = sw["variables"]
+        running = self.sweep_thread is not None and self.sweep_thread.is_alive()
+        # Rebuild only when something shown here changed - not on every visit.
+        # The signature is stored on the list widget, so a reloaded page rebuilds.
+        relevance = tuple(self.relevant(*p.partition(".")[::2])
+                          if p.partition(".")[0] in self.raw
+                          and p.partition(".")[2] in self.raw[p.partition(".")[0]] else None
+                          for p in (it.get("param", "?") for it in items))
+        sig = (json.dumps(sw, sort_keys=True, default=str), tuple(errors), running, relevance)
+        if getattr(self.sw_vars_box, "_sig", None) == sig:
+            self._update_sweep_buttons()
+            return
+        self.sw_vars_box._sig = sig
         # selected parameters list
         for w in self.sw_vars_box.winfo_children():
             w.destroy()
-        items = sw["variables"]
         self.sw_vars_title.configure(text=f"PARAMETERS TO ITERATE  ({len(items)})")
         if not items:
             ctk.CTkLabel(self.sw_vars_box, text="No parameters selected yet. Press 'Iterate' "
@@ -1883,7 +2166,6 @@ class AircraftDesigner(ctk.CTk):
         else:
             self.sw_random_box.grid_remove()
         # design count / problems
-        running = self.sweep_thread is not None and self.sweep_thread.is_alive()
         if errors:
             self.sw_count_lbl.configure(text="✗  " + "\n✗  ".join(errors), text_color=ERR)
         elif not variables:
@@ -2258,7 +2540,7 @@ class AircraftDesigner(ctk.CTk):
         for page in self.pages.values():
             self._outer(page).destroy()
         self.pages, self.rows, self.current = {}, {}, None
-        self._pending, self._prebuild = {}, []
+        self._pending, self._prebuild, self._page_wrap = {}, [], {}
         self.cons_widgets, self.build_btn = [], None
         self.__dict__.pop("_cons_state", None)
         self.sweep_designs, self.sweep_base, self.sweep_used = [], None, []
@@ -2305,8 +2587,7 @@ class AircraftDesigner(ctk.CTk):
 
     def set_dirty(self, d):
         self.dirty = d
-        name = os.path.basename(self.path) if self.path else ""
-        title = f"{APP_NAME} — {name}{'  •  unsaved changes' if d else ''}"
+        title = f"{APP_NAME}{'  •  unsaved changes' if d else ''}"
         if title != self._title:                       # not on every slider event
             self._title = title
             self.title(title)
@@ -2657,9 +2938,12 @@ class AircraftDesigner(ctk.CTk):
     def _style_preview(self, dark):
         c = self._preview_colors(dark)
         self.fig.set_facecolor(c["bg"])
-        for ax, title in zip(self.axes, ("Top view", "Side view", "Front view")):
+        # canvas background = figure colour, so no white shows around the image
+        # while a resize waits for its render
+        self.canvas.get_tk_widget().configure(background=c["bg"])
+        for ax in self.axes:
             ax.set_facecolor(c["bg"])
-            ax.set_title(title, fontsize=9, loc="left", color=c["fg"])
+            ax.title.set_color(c["fg"])
             ax.tick_params(colors=c["fg"], labelsize=7)
             ax.grid(True, color=c["grid"], lw=0.5)
         self._preview_dark = dark

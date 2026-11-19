@@ -30,6 +30,7 @@ that satisfy every parameter limit and every cross-component rule are built.
 - [Using the component scripts on their own](#using-the-component-scripts-on-their-own)
 - [Extending the project](#extending-the-project)
 - [Troubleshooting](#troubleshooting)
+- [Parameter guide: meaning and effects](#parameter-guide-meaning-and-effects)
 
 ---
 
@@ -754,3 +755,131 @@ The GUI sliders, number filters and sweep limits all follow automatically.
 | `run_bat.bat` says Python was not found | Install Python 3.10+ with *"Add python.exe to PATH"*, then run it again. If `.venv` was made with an older Python, delete the `.venv` folder first. |
 | Packages seem out of date | Run `run_bat.bat --install`, or delete `.venv\requirements.installed` to force a reinstall on the next start. |
 | Formulas look wrong after a matplotlib update | Delete `%LOCALAPPDATA%\AircraftDesigner\tex`; the cache is rebuilt automatically. |
+
+---
+
+## Parameter guide: meaning and effects
+
+This section explains every input parameter: what it means, and what changes in
+the aircraft when you change it. The [Parameter reference](#parameter-reference)
+lists the defaults and allowed ranges.
+
+The script builds **geometry**. The flight effects described here
+(stability, drag, stall) are the usual design trends that explain *why* you
+would change a value. The program does not compute them.
+
+### Knock-on effects: the tail resizes itself
+
+The tail is not a fixed size. It is placed at the end of the fuselage, and its
+areas are recomputed from the tail volume coefficients:
+
+```
+S_h = V_h · S_w · MAC_w / l_t          S_v = V_v · S_w · b_w / l_t
+```
+
+So any change to the wing area `S_w`, wing MAC `MAC_w`, wing span `b_w` or tail
+arm `l_t` changes the tail as well. Measured from the default design:
+
+| Change | Tail arm | Stabiliser area | Why |
+|---|---|---|---|
+| `fuselage.length_mm` 2400 → 2800 | +21 % | −17 % | The tail moves aft with the fuselage end |
+| `wing.sweep_deg` 0 → 20 | −23 % | +30 % | The wing's aerodynamic centre moves 296 mm aft |
+| `integration.wing_x_frac` 0.30 → 0.25 | +9 % | −8 % | The wing moves forward |
+| `wing.aspect_ratio` 10 → 14 (same span) | +5 % | −51 % | Smaller wing area and MAC |
+| `integration.tail_overhang_frac` 0 → 0.3 | +6 % | −5 % | The tail reaches further past the fuselage end |
+| `tail.fin_x_offset_mm` 0 → +50 | −3.5 % | +4 % | The fin's root trailing edge is now the aft-most, and it is kept at the fuselage end, so the whole tail moves forward |
+
+The fuselage does **not** scale with the wing. If you make the wing much
+larger or smaller, scale the fuselage lengths by the same factor. Otherwise
+the tail will not fit behind the wing (see [Troubleshooting](#troubleshooting)).
+
+### Wing parameters
+
+| Parameter | What it is | What changing it does |
+|---|---|---|
+| `span_mm` | Tip-to-tip span `b`. | All wing lengths scale with it (AR and taper fixed): area ∝ b², chords ∝ b. A bigger wing lifts more. The tail grows quickly (S_h ∝ S_w·MAC), but the fuselage stays the same, so also scale the fuselage. Watch `fuselage_length_to_span`, `wing_exposed_span`, `wing_root_chord_to_length` and the tail-arm check. |
+| `aspect_ratio` | Slenderness, `AR = b² / S_w`. | At a fixed span, a higher AR gives a smaller area and narrower chords (`c_root = 2b / (AR(1+λ))`). Aerodynamically: less induced drag, so a better glide ratio and endurance (gliders and long-endurance UAVs use 12–25). The cost is higher bending loads, a thinner root in mm and a lower Reynolds number. The tail shrinks with the wing area and MAC. |
+| `taper_ratio` | Tip chord ÷ root chord, `λ`. | Area and span stay the same; a lower λ moves area inboard (bigger root, smaller tip). 0.4–0.6 is close to the ideal elliptical lift distribution (lowest induced drag) and a light structure. 1.0 is a rectangular wing: simple to build, gentle stall. Below about 0.3 the tips stall first, so add washout. A bigger root chord affects `wing_root_chord_to_length` and `wing_root_te_position`. |
+| `sweep_deg` | Angle of the reference chord line (see `sweep_ref`); + = swept back. | Moves the tips aft and the wing's aerodynamic centre aft, which shortens the tail arm and enlarges the tail (+30 % at 20°). Aerodynamically: sweep raises the critical Mach number (only relevant near the speed of sound) and lowers the lift slope. Aft sweep adds roll stability and makes the tips stall first; forward sweep (negative) does the opposite. Low-speed UAVs use 0–5°. |
+| `sweep_ref` | Chord fraction the sweep is measured on: 0 = leading edge, 0.25 = quarter chord, 1 = trailing edge. | Decides which line is straight. On a tapered wing this matters even at 0° sweep: 0 gives a straight leading edge and a forward-swept trailing edge, 0.25 a straight quarter-chord line (the aerodynamic standard), and 1 a straight trailing edge with a swept-back leading edge. It moves the tip chord fore and aft, and with it the wing's aerodynamic centre and the tail arm. |
+| `dihedral_deg` | Upward angle of the wing panels; + = tips up. | The tips rise by `b/2 · tan Γ`. More dihedral increases roll stability: the aircraft returns to wings-level by itself. Too much causes Dutch roll (a wallowing motion) and slower roll response. A high wing already adds roll stability, so high-wing aircraft need less dihedral than low-wing ones. Anhedral (negative) is used where roll stability is already high. |
+| `twist_deg` | Tip incidence relative to the root; negative = washout. | The tip sections are rotated nose-down along the span (linear from root to tip). Washout makes the root stall before the tips, so the ailerons keep working and the stall is gentle. It also reshapes the spanwise lift distribution. Typical values are −1° to −4°; too much costs efficiency in cruise. |
+| `twist_axis` | Chord fraction the sections are rotated about. | Has almost no aerodynamic effect. It chooses which line stays on the dihedral line: 0 keeps the leading edge in place (the trailing edge moves), 0.25 is the usual choice, and 1 keeps the trailing edge straight. It slightly changes the tip leading- and trailing-edge heights. |
+| `n_stations` | Number of loft sections from root to tip. | Model quality only; the size and shape of the planform do not change. Two sections are exact for an untwisted wing. With twist, more sections follow the linear twist more closely. More sections build more slowly. |
+| `naca` | NACA 4-digit section, `MPTT`: max camber M % of the chord, at P tenths of the chord, thickness TT %. `4412` = 4 % camber at 40 %, 12 % thick. | **Camber**: more lift at a given angle and a higher maximum lift, but a stronger nose-down pitching moment that the tail must trim (see `h_incidence_deg`). **Thickness**: a deeper spar (stronger, lighter structure), more internal volume and a gentler stall, but a little more drag. The root thickness must fit inside the fuselage (`wing_root_thickness_ratio` ≤ 0.85, `wing_root_fit`). |
+| `airfoil_file` | A Selig or Lednicer `.dat` file; overrides `naca`. | Use any real airfoil, for example from the UIUC airfoil database. Its thickness and camber have the same effects as above. Leave it empty to use `naca`. |
+| `n_points_per_surface` | 0 = use the file's points as they are; > 0 = resample each surface with that many points, packed towards the leading and trailing edges (cosine spacing). | Smoothness and robustness only. Use it when a `.dat` file has very many, very few or unevenly spaced points, which can make the loft bumpy or fail. |
+
+### Fuselage parameters
+
+| Parameter | What it is | What changing it does |
+|---|---|---|
+| `length_mm` | Total length `L`, nose tip to tail end. | The main lever on the tail arm: the wing sits at `wing_x_frac · L` and the tail at the end, so a longer fuselage gives a longer arm and a smaller tail (2400 → 2800: stabiliser −17 %). It also adds internal volume, weight and skin (friction drag). Watch `fuselage_length_to_span`, `fuselage_fineness` and `tail_arm_to_mac` (2–5 MAC). |
+| `max_width_mm` | Maximum width `W`. | Payload space and frontal area (drag). A wider body covers more of the wing span (`wing_exposed_span`, `fuselage_width_to_span`) and lowers the fineness ratio. The canopy and tail-end checks are ratios to it. |
+| `max_height_mm` | Maximum height `H`, without the canopy hump. | Room for the wing root (`wing_root_fit`, `wing_root_thickness_ratio`) and payload. The tail fit, the fin-height check and the canopy-height check are measured against it. Keep `H/W` within 0.6–1.8. |
+| `nose_frac` | Nose length ÷ `L` (nose tip to the start of the full-size section). | Short = blunt, stubby nose; long = slender nose with less drag and more room for a camera or engine. The constant mid-body (where the wing usually sits) is `1 − nose_frac − tail_frac`, so a longer nose shortens it (`fuselage_nose_plus_tail` ≤ 0.9). A wing that ends up in the thin nose region has less room for its root. |
+| `tail_frac` | Tail-cone length ÷ `L`. | A longer cone tapers more gently: less flow separation and drag (the script warns above a 22° upsweep). The body becomes thin earlier, though, so the wing must stay ahead of it (`wing_root_te_position`). It does not move the tail itself, which is always at the fuselage end. |
+| `nose_bluntness` | Shape of the nose profile: 2 = elliptical, > 2 blunter, < 2 more pointed. | Higher values fill the nose out quickly (more volume, bus-like nose); lower values give a pointed, ogive-like nose. Only the nose changes. |
+| `nose_droop` | Nose-tip height as a fraction of `H/2`; negative = below the centreline. | Negative values give the typical drooped nose (better downward view for a camera or pilot, and a flatter belly). Positive values raise the tip. Only the nose changes. |
+| `section_n_top` | Superellipse exponent of the upper half of the cross-section: 2 = ellipse, larger = boxier. | Boxier shoulders give more internal volume and a flatter top for mounting a high wing, at a slightly higher wetted area. |
+| `section_n_bottom` | Exponent of the lower half: larger = flatter floor. | A flat floor suits payload bays, camera hatches and belly landings. |
+| `section_n_nose`, `section_n_tail` | Exponents at the nose tip and at the tail end. Values are blended along the body. | 2 keeps the nose and tail round; larger values make them squarer. |
+| `canopy_start_frac` | Start of the canopy or avionics hump, as a fraction of `L`. | Moves the hump fore and aft. The hump must end before the tail-cone region (`canopy_within_body`: start + length ≤ 0.7). |
+| `canopy_length_frac` | Length of the hump ÷ `L`. | Longer hump = more volume on top (avionics, satcom dome, cockpit). |
+| `canopy_height_mm` | Extra height at the hump peak; 0 = no hump. | Changes the side profile and adds frontal area (drag). The hump raises the top line, so a high wing under it is placed higher. Limit: `canopy_height_ratio` ≤ 0.35 of `H`. |
+| `canopy_peak_pos` | Position of the peak inside the hump: 0 = front, 1 = rear. | Front values give a steep windscreen and a long fairing behind; rear values the opposite. |
+| `tail_end_width_mm`, `tail_end_height_mm` | Size of the small section at the very end of the fuselage, where the tail is mounted (tail post or boom). 0 for both = pointed tail. | Bigger values give the tail root more room (`tail_root_fit`) and a stiffer mounting, but a blunter end (base drag). Limits: ≤ 0.5 × W and ≤ 0.6 × H. |
+| `tail_upsweep` | Height of the tail-end centre as a fraction of `H/2`; + = up. | Positive values sweep the underside upwards: ground clearance for take-off rotation and for a pusher propeller, and it raises the tail surfaces out of the wing wake. Too much gives a steep upsweep (separation drag, warning above 22°) or puts the tail end above the top line (error). |
+| `tail_shape` | Taper law of the tail cone: 1 = smooth cubic, > 1 keeps the body full for longer. | Values above 1 keep more volume aft and close the cone quickly near the end; values below 1 start tapering earlier. |
+| `n_nose_stations`, `n_mid_stations`, `n_tail_stations` | Loft sections in each part of the body (extra sections are added in the canopy automatically). | Model quality only: more sections follow the shape more closely but build more slowly; too few can leave bumps. |
+| `n_section_points` | Spline points around each cross-section. | Smoothness of each section; the size does not change. |
+
+### Tail parameters
+
+| Parameter | What it is | What changing it does |
+|---|---|---|
+| `configuration` | Tail layout. Every layout is sized to the same `V_h` and `V_v`, so they have the same nominal pitch and yaw authority. | **conventional**: simple and light; the stabiliser sits in the wing and fuselage wake. **t_tail**: stabiliser out of the wake and propeller wash, and acts as an endplate on the fin; heavier fin, deep-stall risk. **cruciform**: in between. **h_tail**: twin endplate fins, short fins, used on twin-boom aircraft. **v_tail**: two surfaces instead of three (less wetted area and interference), but mixed ruddervator control. **inverted_v**: protects a pusher propeller, reduces ground clearance. **y_tail**: V-tail plus a ventral fin (MQ-9 style). |
+| `vh` | Horizontal tail volume coefficient `S_h·l_t / (S_w·MAC_w)`. | The stabiliser area is directly proportional to it. Higher = more pitch stability and elevator authority (a wider usable CG range, trimming flaps), but more weight and drag. Typical: sailplane 0.5, homebuilt 0.5, single-engine GA 0.7, twin 0.8, jet transport 1.0. |
+| `vv` | Vertical tail volume coefficient `S_v·l_t / (S_w·b_w)`. | The fin area is directly proportional to it. Higher = more weathercock (directional) stability and rudder authority (crosswind, engine failure on twins); too low gives weak yaw damping. Typical: sailplane 0.02, homebuilt and GA 0.04, twin 0.07, jet transport 0.09. |
+| `h_area_mm2` | Fixed stabiliser area; 0 = size it from `vh`. | Use it to match an existing aircraft or kit. The area then stays fixed and the achieved `V_h` follows the arm (150 000 mm² on the default gives V_h = 0.44). The `tail_volume_h` check is skipped, so the stability is your responsibility. |
+| `v_area_mm2` | Fixed fin area for all fins together; 0 = size it from `vv`. | As above, for the fin. On the H-tail it is split between the two fins; on the Y-tail between the V-panels and the ventral fin. |
+| `h_aspect_ratio` | Stabiliser `b_h² / S_h` (full span); also used for the V-tail panels. | At the same area, a higher AR gives a wider span and narrower chords: more lift slope per area (more effective), but more bending and a weaker structure. Watch `stab_span_to_wing_span` (0.15–0.5). On the H-tail it also spreads the fins further apart. |
+| `h_taper_ratio` | Stabiliser tip chord ÷ root chord. | Lower values give a bigger root chord (more root attached to the fuselage) and smaller tips; same trends as the wing taper. |
+| `h_sweep_deg` | Stabiliser quarter-chord sweep. | Moves the tips aft. A swept stabiliser stalls later than the wing, which is good for recovery. On the H-tail it moves the fins aft. The tail is re-placed so its root still ends at the fuselage end, so the arm changes slightly. |
+| `h_dihedral_deg` | Stabiliser dihedral. Ignored for V-type tails. | Raises the tips: more clearance from the ground and the wing wake, plus a small roll-stability contribution. Only the horizontal projection counts for pitch, so the area is enlarged automatically to keep `V_h`. |
+| `h_incidence_deg` | Stabiliser setting angle relative to the fuselage axis; + = nose up. Also applied to V-tail panels. | Sets the trim. A cambered wing (for example 4412) pitches nose-down, so the stabiliser is set slightly negative to push the tail down at cruise. The difference between wing and stabiliser incidence (decalage: default 2 − (−1) = 3°) sets the trim speed and the neutral elevator position. Too large a value stalls the stabiliser or adds drag. |
+| `v_aspect_ratio` | Fin `h² / S_v` per fin (also the ventral fin). | Higher = taller, narrower fin: more effective per area, but more root bending and height (`fin_height_to_fuselage`; a tall ventral fin hangs below the fuselage, `tail_below_fuselage`). Lower = long, low fin. |
+| `v_taper_ratio` | Fin tip chord ÷ root chord. | Lower values give a longer root chord on the fuselage. A T-tail needs about 0.7 or more so the fin tip is long enough to carry the stabiliser (the script warns otherwise). |
+| `v_sweep_deg` | Fin quarter-chord sweep. | Moves the fin tip aft. On a T-tail or cruciform the stabiliser sits on the fin, so more fin sweep moves it aft and lengthens its arm. A swept fin stalls later at large sideslip. |
+| `v_tail_angle_deg` | V, inverted-V and Y tails: panel angle from horizontal; 0 = automatic `atan(√(S_v/S_h))` (about 42° with the defaults). | A steeper V gives more yaw and less pitch authority; a shallower V the opposite. With a manual angle, one of the two volume targets is no longer met exactly (`tail_volume_h` / `tail_volume_v` allow ±15 %). |
+| `stab_height_frac` | Cruciform only: stabiliser height ÷ fin height. | Higher moves the stabiliser out of the wake (towards a T-tail) and, on a swept fin, aft. Lower moves it towards a conventional tail. |
+| `fin_below_frac` | H-tail only: share of each endplate fin below the stabiliser. | Larger = fins extend further down (a more symmetric endplate, but less ground clearance, `tail_below_fuselage`). Smaller = fins mostly above. |
+| `ventral_fin_frac` | Y-tail only: share of `S_v` carried by the ventral fin. | Larger = bigger ventral fin (less ground clearance). The V-panels then need less vertical area, so the automatic V angle becomes shallower. |
+| `fin_x_offset_mm` | Moves the fin(s) aft (+) or forward (−) from the default position. | Moving the fin aft keeps the rudder out of the stabiliser's wake (better spin recovery). Because the aft-most root trailing edge stays at the fuselage end, an aft offset moves the whole tail forward (+50 mm: arm −49 mm, stabiliser +4 %). On a T-tail or cruciform the stabiliser is no longer centred on the fin. |
+| `naca` | Symmetric NACA section `00TT` for every tail surface; TT = thickness %. | Thicker = stiffer, more room for hinges and servos, slightly more drag. The thickness is also used to fit the tail root inside the tail cone (`tail_root_fit`). |
+| `airfoil_file` | `.dat` file instead of `naca`. | Same effects as above; it should be a symmetric section. |
+| `n_points_per_surface` | Resampling of the tail airfoil, as for the wing. | Smoothness and robustness only. |
+
+### Integration parameters
+
+| Parameter | What it is | What changing it does |
+|---|---|---|
+| `wing_x_frac` | Wing root leading-edge position ÷ `L`. | Forward = longer tail arm and a smaller tail (0.30 → 0.25: stabiliser −8 %). It also moves the point the aircraft must balance at (the CG must be near the wing's aerodynamic centre; weight and CG are not computed here). Too far forward puts the root in the thin nose (`wing_root_fit`); too far aft breaks `wing_root_te_position` (≤ 0.75) or the tail-arm check. |
+| `wing_vertical_pos` | Wing height inside the fuselage: −1 = low, 0 = mid, +1 = high. The root is always kept inside the body. | **High**: more roll stability, the fuselage hangs below (easy payload access, propeller clearance). **Low**: easy landing-gear mounting, more ground effect, needs more dihedral. **Mid**: lowest interference drag, but the spar passes through the payload space. It also changes the wing height relative to the tail, which affects how much wake reaches the stabiliser. |
+| `wing_incidence_deg` | Wing root setting angle relative to the fuselage axis; + = nose up. | Set it to the wing's cruise angle of attack so the fuselage flies level, with minimum drag. A larger incidence makes the rotated root take more height (`wing_root_fit`) and changes the decalage with the stabiliser (see `h_incidence_deg`). |
+| `tail_overhang_frac` | How far the tail root trailing edge reaches past the fuselage end, as a fraction of the tail root chord; negative = ahead of the end. | Positive = the tail moves aft: longer arm and smaller tail (0 → 0.3: stabiliser −5 %), but less of the root is attached (70 % at 0.3; `tail_root_on_fuselage` needs ≥ 55 %), giving a weaker joint. Negative keeps the whole root on the body. |
+| `tail_vertical_pos` | Tail root height inside the tail cone: −1 = lowest, 0 = middle, +1 = highest that still fits. | Higher lifts the stabiliser further out of the wing wake, and reduces how far ventral, inverted-V and H-tail lower fins hang below the fuselage (`tail_below_fuselage`). Lower does the opposite. |
+
+### Quick guide: what to change for a goal
+
+| Goal | Parameters to change |
+|---|---|
+| Fix *"the tail does not fit behind the wing"* | Increase `fuselage.length_mm`, decrease `integration.wing_x_frac`, increase `integration.tail_overhang_frac`, or lower `tail.vh` / `tail.vv`. If you changed `wing.span_mm` a lot, scale the fuselage by the same factor. |
+| Scale the whole aircraft | Multiply `wing.span_mm` and all fuselage lengths (`length_mm`, `max_width_mm`, `max_height_mm`, `canopy_height_mm`, `tail_end_*`) by the same factor. The tail follows automatically. |
+| Longer endurance / better glide | Higher `wing.aspect_ratio`, `taper_ratio` around 0.45, a little washout (`twist_deg` −2°), a slender fuselage (higher fineness). |
+| Gentler stall | More washout (more negative `twist_deg`), higher `taper_ratio`, a thicker airfoil. |
+| More pitch stability | Higher `tail.vh`, or a longer arm (longer fuselage, wing forward). |
+| More directional stability | Higher `tail.vv`, or a longer arm. |
+| More roll stability | More `wing.dihedral_deg`, or a higher `integration.wing_vertical_pos`. |
+| More payload volume | Larger `max_width_mm` / `max_height_mm`, boxier sections (`section_n_top`, `section_n_bottom`), a longer mid-body (smaller `nose_frac` + `tail_frac`). |
+| More tail ground clearance | Higher `fuselage.tail_upsweep` and `integration.tail_vertical_pos`; a smaller `fin_below_frac` / `ventral_fin_frac`; avoid `inverted_v`. |
