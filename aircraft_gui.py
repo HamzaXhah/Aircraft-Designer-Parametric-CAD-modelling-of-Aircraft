@@ -2422,10 +2422,16 @@ class AircraftDesigner(ctk.CTk):
                        OK if ok else ERR, True)
         else:
             ac = self.current_ac
+            n = len(self.issues)
             caption = ("Current configuration", MUTED, False)
-            if ac is None and self._preview_key is not None:
-                caption = ("Previous design - the current settings cannot be drawn",
+            if ac is None:
+                caption = (("Previous design - the current settings cannot be drawn"
+                            if self._preview_key is not None else
+                            "The current settings cannot be drawn") + " (see Checks)",
                            WARN, False)
+            elif n:
+                caption = (f"Current configuration - cannot be built: {n} issue"
+                           f"{'s' * (n > 1)} (see Checks)", ERR, False)
         if caption != self._caption_state:
             self._caption_state = caption
             self.preview_caption.configure(text=caption[0], text_color=caption[1])

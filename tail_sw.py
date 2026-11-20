@@ -87,8 +87,8 @@ from dataclasses import asdict, dataclass, fields, replace
 
 import numpy as np
 
-from wing_solidworks import (Airfoil, WingParams, derive_planform, load_airfoil,
-                             naca4, resample)
+from wing_solidworks import (Airfoil, WingParams, check_resample_points, derive_planform,
+                             load_airfoil, naca4, resample)
 
 
 CONFIGURATIONS = {
@@ -265,6 +265,7 @@ def validate(p: TailParams) -> list[str]:
         raise ValueError("ventral_fin_frac must be in (0, 0.6).")
     if len(p.naca) != 4 or not p.naca.isdigit():
         raise ValueError("naca must be a 4-digit code, e.g. '0010'.")
+    check_resample_points(p.n_points_per_surface)
     if p.naca[:2] != "00" and not p.airfoil_file:
         notes.append(f"NACA {p.naca} is cambered; tail surfaces are normally symmetric.")
     if not 3.0 <= p.h_aspect_ratio <= 6.0:
@@ -360,8 +361,10 @@ def derive_layout(p: TailParams, wing: WingRef) -> TailLayout:
     if cfg not in ("v_tail", "inverted_v", "y_tail"):
         for _ in range(30):
             _, _, vh, vv = effective_volumes(lay)
-            kh = p.vh / vh if p.h_area_mm2 == 0 else 1.0
-            kv = p.vv / vv if p.v_area_mm2 == 0 else 1.0
+            # a surface moved ahead of the wing (arm <= 0) cannot be re-sized; it
+            # keeps its nominal size and the volume constraints report it
+            kh = p.vh / vh if p.h_area_mm2 == 0 and vh > 0 else 1.0
+            kv = p.vv / vv if p.v_area_mm2 == 0 and vv > 0 else 1.0
             if abs(kh - 1) < 1e-6 and abs(kv - 1) < 1e-6:
                 break
             s_h, s_v = s_h * kh, s_v * kv

@@ -347,7 +347,7 @@ The defaults satisfy every constraint, with all seven tail layouts.
 | `n_stations` | 6 | 2 – 12 |  | Loft sections from root to tip |
 | `naca` | `4412` | 4 digits |  | NACA 4-digit section (used when no airfoil file is set) |
 | `airfoil_file` | (empty) | empty or `.dat` path |  | Selig / Lednicer .dat file; empty = use the NACA section |
-| `n_points_per_surface` | 0 | 0 – 200 |  | 0 = use the airfoil points as they are, > 0 = cosine resampling |
+| `n_points_per_surface` | 0 | 0 – 200 |  | 0 = use the airfoil points as they are, 10-200 = cosine resampling |
 
 #### `fuselage`
 
@@ -406,7 +406,7 @@ values along the body.
 | `fin_x_offset_mm` | 0 | -500 – 500 | mm | Move the fin(s) aft (+) or forward (-) from the default position |
 | `naca` | `0010` | `00xx` (symmetric) |  | Symmetric NACA 4-digit section for all tail surfaces |
 | `airfoil_file` | (empty) | empty or `.dat` path |  | .dat file used instead of the NACA section |
-| `n_points_per_surface` | 0 | 0 – 200 |  | 0 = use the airfoil points as they are, > 0 = cosine resampling |
+| `n_points_per_surface` | 0 | 0 – 200 |  | 0 = use the airfoil points as they are, 10-200 = cosine resampling |
 
 The seven tail layouts:
 
@@ -545,8 +545,13 @@ aircraft is integrated and checked:
 - The page badges, the Constraints page and the status card update.
 - **Build stays disabled** until everything passes.
 
-If the current settings cannot be drawn at all, the preview keeps the previous
-design and says so.
+The preview always draws the current settings, even when they break rules
+(its caption then turns red and says how many issues block the build). For
+example, a wing too big for the fuselage is drawn with the tail at the end of
+the fuselage, sized for a 3 x MAC arm, so you can see the overlap. Only
+contradictory inputs that have no geometry at all (for example a tail-end
+section larger than the fuselage section) keep the previous design on screen,
+with a caption saying so.
 
 ### Preview
 
@@ -836,7 +841,7 @@ The GUI sliders, number filters and sweep limits all follow automatically.
 | Cannot connect to CATIA | Start CATIA V5 first, as the same Windows user and with the same administrator rights as the terminal / GUI. If it still fails, register CATIA for automation once: `cnext /regserver` from an administrator prompt in CATIA's `win_b64\code\bin` folder. |
 | CATIA saved `uav_2.CATPart` instead of `uav.CATPart` | A part named `uav.CATPart` was still open in CATIA (usually the previous build). Close that window first if you want to overwrite the file. |
 | *"Configuration rejected – nothing was built"* | The listed parameters or rules are out of range. `python aircraft_sw.py --check` shows every value and constraint. |
-| *"tail arm would be … mm: the tail does not fit behind the wing"* | The fuselage is too short for this wing position and tail size. Make the fuselage longer, move the wing forward (`integration.wing_x_frac`) or reduce the tail size. |
+| *"tail arm is … mm: the tail does not fit behind the wing"* | The fuselage is too short for this wing position and tail size (for example a much larger span with the default fuselage: the wing chord grows with the span). Make the fuselage longer, move the wing forward (`integration.wing_x_frac`) or reduce the tail size. |
 | *"tail root does not fit inside the tail cone"* | Increase `fuselage.tail_end_height_mm`, reduce `integration.tail_overhang_frac`, or use a thinner tail section. |
 | Build button disabled in the GUI | At least one issue is open. See the Checks tab or the status card. |
 | Save error in a batch build | The target `.SLDPRT` / `.CATPart` is probably open or locked; close it or choose another folder. |
@@ -898,7 +903,7 @@ the tail will not fit behind the wing (see [Troubleshooting](#troubleshooting)).
 | `n_stations` | Number of loft sections from root to tip. | Model quality only; the size and shape of the planform do not change. Two sections are exact for an untwisted wing. With twist, more sections follow the linear twist more closely. More sections build more slowly. |
 | `naca` | NACA 4-digit section, `MPTT`: max camber M % of the chord, at P tenths of the chord, thickness TT %. `4412` = 4 % camber at 40 %, 12 % thick. | **Camber**: more lift at a given angle and a higher maximum lift, but a stronger nose-down pitching moment that the tail must trim (see `h_incidence_deg`). **Thickness**: a deeper spar (stronger, lighter structure), more internal volume and a gentler stall, but a little more drag. The root thickness must fit inside the fuselage (`wing_root_thickness_ratio` ≤ 0.85, `wing_root_fit`). |
 | `airfoil_file` | A Selig or Lednicer `.dat` file; overrides `naca`. | Use any real airfoil, for example from the UIUC airfoil database. Its thickness and camber have the same effects as above. Leave it empty to use `naca`. |
-| `n_points_per_surface` | 0 = use the file's points as they are; > 0 = resample each surface with that many points, packed towards the leading and trailing edges (cosine spacing). | Smoothness and robustness only. Use it when a `.dat` file has very many, very few or unevenly spaced points, which can make the loft bumpy or fail. |
+| `n_points_per_surface` | 0 = use the file's points as they are; 10 or more = resample each surface with that many points, packed towards the leading and trailing edges (cosine spacing). | Smoothness and robustness only. Use it when a `.dat` file has very many, very few or unevenly spaced points, which can make the loft bumpy or fail. |
 
 ### Fuselage parameters
 

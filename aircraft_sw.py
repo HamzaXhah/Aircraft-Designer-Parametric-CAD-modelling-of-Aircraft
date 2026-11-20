@@ -324,6 +324,10 @@ class Aircraft:
     notes: list
 
 
+TAIL_ARM_NOMINAL_MAC = 3.0      # first guess for the tail arm, in wing MACs
+TAIL_ARM_MIN_MAC = 0.2          # shorter than this, the tail does not fit behind the wing
+
+
 def _airfoil(file, naca, n):
     af = W.load_airfoil(file) if file else W.naca4(naca)
     return W.resample(af, n) if n > 0 else af
@@ -416,26 +420,36 @@ def integrate(wp, fp, tp, ip) -> Aircraft:
     # ---- tail: x placement and sizing on the resulting arm (fixed point) ------
     taf = _airfoil(tp.airfoil_file, tp.naca, tp.n_points_per_surface)
     wref = T.WingRef(pf.area, pf.mac, pf.span)
-    lt, ox, converged = 3.0 * pf.mac, 0.0, False
-    for _ in range(200):
-        lay = T.derive_layout(replace(tp, tail_arm_mm=lt), wref)
+
+    def place_tail(arm):
+        """Tail sized for `arm`, with its x origin at the end of the fuselage."""
+        lay = T.derive_layout(replace(tp, tail_arm_mm=arm), wref)
         att = _attached(lay)
         if not att:
             raise ConfigError(["tail: no surface is rooted on the fuselage centreline."])
         ref = max(att, key=lambda p: p.root_le[0] + p.c_root)
-        ox = flay.L + ip.tail_overhang_frac * ref.c_root - (ref.root_le[0] + ref.c_root)
+        return lay, att, flay.L + ip.tail_overhang_frac * ref.c_root - (ref.root_le[0] + ref.c_root)
+
+    lt, converged, fits = TAIL_ARM_NOMINAL_MAC * pf.mac, False, True
+    for _ in range(200):
+        lay, att, ox = place_tail(lt)
         lt_new = ox - x_ac_w
-        if lt_new <= 0.2 * pf.mac:
-            raise ConfigError([
-                f"tail arm would be {lt_new:.0f} mm: the tail does not fit behind the wing. "
-                "Make the fuselage longer, move the wing forward (integration.wing_x_frac) "
-                "or reduce the tail size."])
+        if lt_new <= TAIL_ARM_MIN_MAC * pf.mac:
+            fits = False
+            break
         if abs(lt_new - lt) < 1e-6:
             converged = True
             break
         lt = 0.5 * (lt + lt_new)
-    if not converged:
+    if not fits:
+        # The tail does not fit behind the wing - hard_checks() reports it, so the
+        # design cannot be built. It is still placed at the end of the fuselage,
+        # sized for the nominal arm, so the aircraft can be previewed as entered.
+        lt = TAIL_ARM_NOMINAL_MAC * pf.mac
+        lay, att, ox = place_tail(lt)
+    elif not converged:
         notes.append("tail placement iteration did not fully converge.")
+    lt_geo = ox - x_ac_w                    # real arm: equals lt when the tail fits
 
     # ---- tail: vertical placement inside the tail cone -----------------------
     t_c = _thickness_ratio(taf)
@@ -463,10 +477,12 @@ def integrate(wp, fp, tp, ip) -> Aircraft:
     tail_sections = T.all_sections(tp_final, tlay, taf)
     tpts = np.vstack([np.vstack([s.upper, s.lower])
                       for _, _, ss in tail_sections for s in ss])
-    sh, sv, vh, vv = T.effective_volumes(tlay)
+    # volume coefficients on the real arm (they come out negative when the tail
+    # sits ahead of the wing's aerodynamic centre, so the constraints report it)
+    sh, sv, vh, vv = T.effective_volumes(tlay if fits else replace(tlay, tail_arm=lt_geo))
 
     d.update(
-        tail_arm_mm=lt, tail_origin_x_mm=ox, tail_origin_y_mm=oy,
+        tail_arm_mm=lt if fits else lt_geo, tail_origin_x_mm=ox, tail_origin_y_mm=oy,
         tail_s_h_mm2=sh, tail_s_v_mm2=sv, tail_v_angle_deg=tlay.v_angle_deg,
         tail_vh_effective=vh, tail_vv_effective=vv,
         tail_vh_ratio=vh / tp.vh if tp.h_area_mm2 == 0 else 1.0,
@@ -507,6 +523,12 @@ def evaluate_constraints(cfg: Config, ac: Aircraft):
 # Hard geometric requirements that hold regardless of the configured constraints.
 def hard_checks(ac: Aircraft) -> list[str]:
     d, errs = ac.derived, []
+    if d["tail_arm_mm"] <= TAIL_ARM_MIN_MAC * ac.pf.mac:
+        errs.append(f"tail arm is {d['tail_arm_mm']:.0f} mm: the tail does not fit behind "
+                    "the wing (the preview shows it at the end of the fuselage, sized for "
+                    f"a {TAIL_ARM_NOMINAL_MAC:g} x MAC arm). Make the fuselage longer, move "
+                    "the wing forward (integration.wing_x_frac) or reduce the wing chord "
+                    "(larger aspect ratio or smaller span).")
     if d["wing_root_fit_mm"] < 0:
         errs.append(f"wing root airfoil does not fit inside the fuselage "
                     f"(short by {-d['wing_root_fit_mm']:.1f} mm): increase the fuselage "

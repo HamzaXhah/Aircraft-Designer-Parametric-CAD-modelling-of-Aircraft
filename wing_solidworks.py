@@ -121,6 +121,16 @@ def validate(p: WingParams) -> None:
         raise ValueError("Sweep/dihedral out of a sensible range.")
     if not 0.0 <= p.sweep_ref <= 1.0 or not 0.0 <= p.twist_axis <= 1.0:
         raise ValueError("sweep_ref and twist_axis are chord fractions in [0, 1].")
+    check_resample_points(p.n_points_per_surface)
+
+
+MIN_RESAMPLE_POINTS = 10                  # fewer points cannot describe an airfoil
+
+
+def check_resample_points(n: int) -> None:
+    if 0 < n < MIN_RESAMPLE_POINTS:
+        raise ValueError(f"n_points_per_surface must be 0 (airfoil points as they are) "
+                         f"or at least {MIN_RESAMPLE_POINTS}.")
 
 
 def chord_at(p: WingParams, c_root: float, z: float, semi: float) -> float:

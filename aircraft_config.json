@@ -24,7 +24,7 @@
     "n_stations":           {"value": 6, "min": 2, "max": 12, "unit": "-", "description": "Loft sections from root to tip"},
     "naca":                 {"value": "4412", "pattern": "^[0-9]{4}$", "unit": "-", "description": "NACA 4-digit section (used when no airfoil file is set)"},
     "airfoil_file":         {"value": "", "pattern": "^$|\\.dat$", "unit": "-", "description": "Selig / Lednicer .dat file; empty = use the NACA section"},
-    "n_points_per_surface": {"value": 0, "min": 0, "max": 200, "unit": "-", "description": "0 = use the airfoil points as they are, > 0 = cosine resampling"}
+    "n_points_per_surface": {"value": 0, "min": 0, "max": 200, "unit": "-", "description": "0 = use the airfoil points as they are, 10-200 = cosine resampling"}
   },
 
   "fuselage": {
@@ -74,7 +74,7 @@
     "fin_x_offset_mm":      {"value": 0.0, "min": -500.0, "max": 500.0, "unit": "mm", "description": "Move the fin(s) aft (+) or forward (-) from the default position"},
     "naca":                 {"value": "0010", "pattern": "^00[0-9]{2}$", "unit": "-", "description": "Symmetric NACA 4-digit section for all tail surfaces"},
     "airfoil_file":         {"value": "", "pattern": "^$|\\.dat$", "unit": "-", "description": ".dat file used instead of the NACA section"},
-    "n_points_per_surface": {"value": 0, "min": 0, "max": 200, "unit": "-", "description": "0 = use the airfoil points as they are, > 0 = cosine resampling"}
+    "n_points_per_surface": {"value": 0, "min": 0, "max": 200, "unit": "-", "description": "0 = use the airfoil points as they are, 10-200 = cosine resampling"}
   },
 
   "integration": {
