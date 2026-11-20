@@ -520,31 +520,104 @@ def evaluate_constraints(cfg: Config, ac: Aircraft):
     return out
 
 
+# Which parameters drive each derived value - used to point at the parameters
+# behind a failed check or constraint (the GUI marks those rows). The main
+# levers only, not every parameter with some small influence.
+_WING_CHORD = ("wing.span_mm", "wing.aspect_ratio", "wing.taper_ratio")
+_WING_SECTION = ("wing.naca", "wing.airfoil_file", "integration.wing_incidence_deg")
+_TAIL_SECTION = ("tail.naca", "tail.airfoil_file")
+DERIVED_PARAMS = {
+    "wing_root_chord_mm": _WING_CHORD,
+    "wing_mac_mm": _WING_CHORD,
+    "wing_root_thickness_mm": _WING_CHORD + _WING_SECTION,
+    "fuselage_height_at_wing_mm": ("fuselage.max_height_mm", "integration.wing_x_frac",
+                                   "fuselage.nose_frac", "fuselage.tail_frac"),
+    "wing_root_fit_mm": _WING_CHORD + _WING_SECTION + (
+        "fuselage.max_height_mm", "integration.wing_x_frac", "fuselage.nose_frac",
+        "fuselage.tail_frac"),
+    "wing_root_te_x_mm": _WING_CHORD + ("integration.wing_x_frac", "fuselage.length_mm"),
+    "tail_arm_mm": _WING_CHORD + ("wing.sweep_deg", "integration.wing_x_frac",
+                                  "fuselage.length_mm", "integration.tail_overhang_frac"),
+    "wing_tail_gap_mm": _WING_CHORD + ("wing.sweep_deg", "integration.wing_x_frac",
+                                       "fuselage.length_mm", "integration.tail_overhang_frac",
+                                       "tail.vh", "tail.vv", "tail.h_sweep_deg",
+                                       "tail.v_sweep_deg"),
+    "tail_span_mm": ("tail.configuration", "tail.vh", "tail.h_area_mm2", "tail.h_aspect_ratio"),
+    "tail_height_mm": ("tail.configuration", "tail.vv", "tail.v_area_mm2",
+                       "tail.v_aspect_ratio", "tail.v_tail_angle_deg"),
+    "tail_root_fit_mm": _TAIL_SECTION + ("fuselage.tail_end_height_mm", "fuselage.tail_upsweep",
+                                         "fuselage.tail_shape",
+                                         "integration.tail_overhang_frac"),
+    "tail_root_overlap_frac": ("integration.tail_overhang_frac", "tail.fin_x_offset_mm"),
+    "tail_below_fuselage_mm": ("tail.configuration", "integration.tail_vertical_pos",
+                               "tail.fin_below_frac", "tail.ventral_fin_frac",
+                               "tail.h_dihedral_deg"),
+    "tail_vh_ratio": ("tail.configuration", "tail.vh", "tail.h_area_mm2",
+                      "tail.v_tail_angle_deg"),
+    "tail_vv_ratio": ("tail.configuration", "tail.vv", "tail.v_area_mm2",
+                      "tail.v_tail_angle_deg"),
+}
+_PARAM_REF = re.compile(r"\b(wing|fuselage|tail|integration)\.(\w+)")
+_DERIVED_REF = re.compile(r"\bderived\.(\w+)")
+
+
+def drivers(*names: str) -> list[tuple[str, str]]:
+    """(section, parameter) pairs behind derived values and/or 'sec.name' refs."""
+    out = []
+    for n in names:
+        for ref in DERIVED_PARAMS.get(n, (n,)):
+            sec, _, name = ref.partition(".")
+            if name and (sec, name) not in out:
+                out.append((sec, name))
+    return out
+
+
+def constraint_params(c: dict) -> list[tuple[str, str]]:
+    """Parameters a constraint depends on: those named in its expression plus
+    the drivers of the derived values it uses."""
+    expr = c["expr"]
+    return drivers(*[f"{s}.{n}" for s, n in _PARAM_REF.findall(expr)],
+                   *_DERIVED_REF.findall(expr))
+
+
 # Hard geometric requirements that hold regardless of the configured constraints.
-def hard_checks(ac: Aircraft) -> list[str]:
+def hard_check_issues(ac: Aircraft) -> list[tuple[str, list[tuple[str, str]]]]:
+    """[(message, [(section, parameter) that drive it])]"""
     d, errs = ac.derived, []
     if d["tail_arm_mm"] <= TAIL_ARM_MIN_MAC * ac.pf.mac:
-        errs.append(f"tail arm is {d['tail_arm_mm']:.0f} mm: the tail does not fit behind "
-                    "the wing (the preview shows it at the end of the fuselage, sized for "
-                    f"a {TAIL_ARM_NOMINAL_MAC:g} x MAC arm). Make the fuselage longer, move "
-                    "the wing forward (integration.wing_x_frac) or reduce the wing chord "
-                    "(larger aspect ratio or smaller span).")
+        errs.append((f"tail arm is {d['tail_arm_mm']:.0f} mm: the tail does not fit behind "
+                     "the wing (the preview shows it at the end of the fuselage, sized for "
+                     f"a {TAIL_ARM_NOMINAL_MAC:g} x MAC arm). Make the fuselage longer, move "
+                     "the wing forward (integration.wing_x_frac) or reduce the wing chord "
+                     "(larger aspect ratio or smaller span).", drivers("tail_arm_mm")))
     if d["wing_root_fit_mm"] < 0:
-        errs.append(f"wing root airfoil does not fit inside the fuselage "
-                    f"(short by {-d['wing_root_fit_mm']:.1f} mm): increase the fuselage "
-                    "height, move the wing to a thicker part of the fuselage, or use a "
-                    "thinner / shorter root section.")
+        errs.append((f"wing root airfoil does not fit inside the fuselage "
+                     f"(short by {-d['wing_root_fit_mm']:.1f} mm): increase the fuselage "
+                     "height, move the wing to a thicker part of the fuselage, or use a "
+                     "thinner / shorter root section.", drivers("wing_root_fit_mm")))
     if d["tail_root_fit_mm"] < 0:
-        errs.append(f"tail root does not fit inside the tail cone (short by "
-                    f"{-d['tail_root_fit_mm']:.1f} mm): increase fuselage.tail_end_height_mm, "
-                    "reduce integration.tail_overhang_frac or use a thinner tail section.")
+        errs.append((f"tail root does not fit inside the tail cone (short by "
+                     f"{-d['tail_root_fit_mm']:.1f} mm): increase fuselage.tail_end_height_mm, "
+                     "reduce integration.tail_overhang_frac or use a thinner tail section.",
+                     drivers("tail_root_fit_mm")))
     if d["tail_root_overlap_frac"] <= 0:
-        errs.append("tail root is not attached to the fuselage.")
+        errs.append(("tail root is not attached to the fuselage: reduce "
+                     "integration.tail_overhang_frac.", drivers("tail_root_overlap_frac")))
     if d["wing_tail_gap_mm"] <= 0:
-        errs.append("tail overlaps the wing in x.")
+        errs.append((f"tail overlaps the wing in x: the tail leading edge is "
+                     f"{-d['wing_tail_gap_mm']:.0f} mm ahead of the wing trailing edge "
+                     f"(wing TE at x = {d['wing_te_max_x_mm']:.0f} mm, tail LE at x = "
+                     f"{d['tail_le_min_x_mm']:.0f} mm). Move the wing forward, make the "
+                     "fuselage longer, reduce the wing sweep or chord, or move the tail aft.",
+                     drivers("wing_tail_gap_mm")))
     if ac.pf.span / 2 <= ac.fp.max_width_mm / 2:
-        errs.append("wing span is smaller than the fuselage width.")
+        errs.append(("wing span is smaller than the fuselage width.",
+                     drivers("wing.span_mm", "fuselage.max_width_mm")))
     return errs
+
+
+def hard_checks(ac: Aircraft) -> list[str]:
+    return [msg for msg, _ in hard_check_issues(ac)]
 
 
 # =============================================================================

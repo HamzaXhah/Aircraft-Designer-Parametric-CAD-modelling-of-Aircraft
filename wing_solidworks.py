@@ -110,15 +110,15 @@ class Planform:
 
 def validate(p: WingParams) -> None:
     if p.aspect_ratio <= 0 or p.span_mm <= 0:
-        raise ValueError("AR and span must be positive.")
+        raise ValueError("aspect_ratio and span_mm must be positive.")
     if p.taper_ratio <= 0:
-        raise ValueError("Taper ratio must be > 0.")
+        raise ValueError("taper_ratio must be > 0.")
     if p.taper_ratio > 1:
         print("  [warn] TR > 1: reverse-tapered wing.")
     if p.n_stations < 2:
         raise ValueError("n_stations must be >= 2.")
     if abs(p.sweep_deg) >= 80 or abs(p.dihedral_deg) >= 45:
-        raise ValueError("Sweep/dihedral out of a sensible range.")
+        raise ValueError("sweep_deg must be within +-80 deg and dihedral_deg within +-45 deg.")
     if not 0.0 <= p.sweep_ref <= 1.0 or not 0.0 <= p.twist_axis <= 1.0:
         raise ValueError("sweep_ref and twist_axis are chord fractions in [0, 1].")
     check_resample_points(p.n_points_per_surface)

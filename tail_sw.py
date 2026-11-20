@@ -246,13 +246,13 @@ def validate(p: TailParams) -> list[str]:
         if getattr(p, name) <= 0:
             raise ValueError(f"{name} must be > 0.")
     if p.h_area_mm2 < 0 or p.v_area_mm2 < 0 or p.tail_arm_mm < 0:
-        raise ValueError("Areas and tail arm must be >= 0.")
+        raise ValueError("h_area_mm2, v_area_mm2 and tail_arm_mm must be >= 0.")
     if p.h_area_mm2 == 0 and p.vh <= 0:
         raise ValueError("vh must be > 0 (or give h_area_mm2).")
     if p.v_area_mm2 == 0 and p.vv <= 0:
         raise ValueError("vv must be > 0 (or give v_area_mm2).")
     if abs(p.h_sweep_deg) >= 60 or abs(p.v_sweep_deg) >= 70:
-        raise ValueError("Sweep out of a sensible range.")
+        raise ValueError("h_sweep_deg must be within +-60 deg and v_sweep_deg within +-70 deg.")
     if abs(p.h_dihedral_deg) > 30:
         raise ValueError("h_dihedral_deg must be within +-30 deg.")
     if p.v_tail_angle_deg and not 15 <= p.v_tail_angle_deg <= 60:

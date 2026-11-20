@@ -126,7 +126,7 @@ class FuselageParams:
 def validate(p: FuselageParams) -> list[str]:
     notes = []
     if p.length_mm <= 0 or p.max_width_mm <= 0 or p.max_height_mm <= 0:
-        raise ValueError("Length, width and height must be positive.")
+        raise ValueError("length_mm, max_width_mm and max_height_mm must be positive.")
     if not (0 < p.nose_frac < 1 and 0 < p.tail_frac < 1):
         raise ValueError("nose_frac and tail_frac must be in (0, 1).")
     if p.nose_frac + p.tail_frac > 1.0:
@@ -139,11 +139,14 @@ def validate(p: FuselageParams) -> list[str]:
         if not 1.5 <= getattr(p, name) <= 8.0:
             raise ValueError(f"{name} must be in [1.5, 8].")
     if p.tail_end_width_mm < 0 or p.tail_end_height_mm < 0:
-        raise ValueError("Tail-end dimensions must be >= 0.")
+        raise ValueError("tail_end_width_mm and tail_end_height_mm must be >= 0.")
     if (p.tail_end_width_mm == 0) != (p.tail_end_height_mm == 0):
-        raise ValueError("Set both tail-end width and height to 0 for a pointed tail.")
-    if p.tail_end_width_mm > p.max_width_mm or p.tail_end_height_mm > p.max_height_mm:
-        raise ValueError("Tail-end section cannot exceed the max section.")
+        raise ValueError("tail_end_width_mm and tail_end_height_mm must both be 0 (pointed "
+                         "tail) or both be > 0.")
+    if p.tail_end_width_mm > p.max_width_mm:
+        raise ValueError("tail_end_width_mm cannot exceed max_width_mm.")
+    if p.tail_end_height_mm > p.max_height_mm:
+        raise ValueError("tail_end_height_mm cannot exceed max_height_mm.")
     top_end = p.tail_upsweep * p.max_height_mm / 2 + p.tail_end_height_mm / 2
     if top_end > p.max_height_mm / 2 + 1e-9:
         raise ValueError("tail_upsweep too large: tail end would stick out above the "
@@ -152,11 +155,13 @@ def validate(p: FuselageParams) -> list[str]:
         raise ValueError("canopy_height_mm must be >= 0.")
     if p.canopy_height_mm > 0:
         if p.canopy_start_frac < 0 or p.canopy_start_frac + p.canopy_length_frac > 1:
-            raise ValueError("Canopy must lie within the fuselage length.")
+            raise ValueError("canopy_start_frac + canopy_length_frac must be <= 1 (the canopy "
+                             "must lie within the fuselage length).")
         if not 0.05 <= p.canopy_peak_pos <= 0.95:
             raise ValueError("canopy_peak_pos must be in [0.05, 0.95].")
     if min(p.n_nose_stations, p.n_tail_stations) < 3 or p.n_mid_stations < 0:
-        raise ValueError("Need >= 3 nose and tail stations, >= 0 mid stations.")
+        raise ValueError("n_nose_stations and n_tail_stations must be >= 3, "
+                         "n_mid_stations >= 0.")
     if p.n_section_points < 16:
         raise ValueError("n_section_points must be >= 16.")
     if p.tail_shape < 0.5:

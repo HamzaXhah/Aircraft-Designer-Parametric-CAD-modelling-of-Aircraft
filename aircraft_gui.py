@@ -315,6 +315,15 @@ def pretty(name: str) -> str:
     return LABELS.get(name) or re.sub(r"_(mm2|mm|deg|frac)$", "", name).replace("_", " ").capitalize()
 
 
+def param_label(sec: str, name: str) -> str:
+    """Row title, plus the tail surface where stabiliser and fin rows share it."""
+    label = pretty(name)
+    if sec == "tail" and name.startswith(("h_", "v_")) and not label.startswith(
+            ("Horizontal", "Vertical", "Fixed", "V-")):
+        label += ", stabiliser" if name.startswith("h_") else ", fin"
+    return label
+
+
 def fmt(v) -> str:
     if isinstance(v, int):
         return str(v)
@@ -2772,9 +2781,22 @@ class AircraftDesigner(ctk.CTk):
         ref = re.compile(r"\b(wing|fuselage|tail|integration)\.(\w+)")
 
         def add(text, level, params=(), sections=()):
-            ps = set(params)
+            # only parameters that apply to the current configuration (a hidden
+            # V-tail angle cannot fix a conventional tail)
+            ps = [p for p in dict.fromkeys(params)
+                  if p[0] in PARAM_PAGES and isinstance(self.raw[p[0]].get(p[1]), dict)
+                  and self.relevant(*p)]
             ss = set(sections) | {p[0] for p in ps}
             issues.append(dict(text=text, level=level, params=ps, sections=ss))
+
+        def named_in(text, sec):
+            """'sec.name' references plus bare parameter names of `sec`."""
+            found = ref.findall(text)
+            if sec in A.SECTIONS:
+                found += [(sec, n) for n in self.raw[sec]
+                          if isinstance(self.raw[sec][n], dict)
+                          and re.search(rf"\b{re.escape(n)}\b", text)]
+            return found
 
         try:
             cfg = A.config_from_dict(self.raw)
@@ -2782,26 +2804,20 @@ class AircraftDesigner(ctk.CTk):
             ac = A.integrate(p["wing"], p["fuselage"], p["tail"], p["integration"])
             results = A.evaluate_constraints(cfg, ac)
             notes = ac.notes
-            for msg in A.hard_checks(ac):
-                low = msg.lower()
-                secs = set()
-                if "wing" in low:
-                    secs |= {"wing", "integration", "fuselage"}
-                if "tail" in low:
-                    secs |= {"tail", "integration", "fuselage"}
-                add(msg, "error", ref.findall(msg), secs)
+            for msg, params in A.hard_check_issues(ac):
+                add(msg, "error", params)
             for c, val, ok, msg in results:
                 if ok:
                     continue
-                params = ref.findall(c["expr"])
                 secs = set()
                 for d in re.findall(r"\bderived\.(\w+)", c["expr"]):
                     secs |= section_of_derived(d)
-                add(msg, "constraint", params, secs)
+                add(msg, "constraint", A.constraint_params(c), secs)
         except A.ConfigError as exc:
             for e in exc.errors:
                 m = re.match(r"(wing|fuselage|tail|integration)[.:]", e)
-                add(e, "error", ref.findall(e), {m.group(1)} if m else set())
+                sec = m.group(1) if m else ""
+                add(e, "error", named_in(e, sec), {sec} if sec else set())
         except Exception as exc:
             add(f"{type(exc).__name__}: {exc}", "error", (), set(PARAM_PAGES))
 
@@ -2912,7 +2928,8 @@ class AircraftDesigner(ctk.CTk):
             self.after_idle(self._draw_current_preview)
 
     def _update_checks(self, issues):
-        sig = (tuple((i["text"], i["level"], tuple(sorted(i["sections"]))) for i in issues),
+        sig = (tuple((i["text"], i["level"], tuple(sorted(i["sections"])), tuple(i["params"]))
+                     for i in issues),
                tuple(self.notes), len(self.results))
         if sig == self._checks_sig or self.tabs.get() != "Checks":
             return
@@ -2934,15 +2951,24 @@ class AircraftDesigner(ctk.CTk):
             f = ctk.CTkFrame(self.checks_frame, fg_color=CARD, corner_radius=8)
             f.grid(row=r, column=0, sticky="ew", pady=3)
             f.grid_columnconfigure(1, weight=1)
-            ctk.CTkFrame(f, width=4, fg_color=color, corner_radius=2).grid(
-                row=0, column=0, sticky="ns", padx=(6, 8), pady=6)
-            where = ", ".join(sorted(dict(PAGES)[s] for s in it["sections"] if s in dict(PAGES)))
+            # height=1: the strip stretches over the text rows instead of forcing
+            # them to the frame's 200 px default height
+            ctk.CTkFrame(f, width=4, height=1, fg_color=color, corner_radius=2).grid(
+                row=0, column=0, rowspan=3, sticky="ns", padx=(6, 8), pady=6)
+            pages = dict(PAGES)
+            where = ", ".join(sorted(pages[s] for s in it["sections"] if s in pages))
             ctk.CTkLabel(f, text=it["text"], font=self.f_small, wraplength=380,
                          justify="left", anchor="w").grid(row=0, column=1, sticky="w", pady=(6, 0))
-            ctk.CTkLabel(f, text=("Range error" if it["level"] == "error" else "Constraint")
+            ctk.CTkLabel(f, text=("Error" if it["level"] == "error" else "Constraint")
                          + (f"  ·  {where}" if where else ""), font=self.f_tiny,
                          text_color=MUTED, anchor="w").grid(row=1, column=1, sticky="w",
-                                                            pady=(0, 6))
+                                                            pady=(0, 0 if it["params"] else 6))
+            if it["params"]:
+                adjust = ", ".join(f"{param_label(s, n)} ({pages.get(s, s)})"
+                                   for s, n in it["params"])
+                ctk.CTkLabel(f, text=f"Adjust: {adjust}", font=self.f_tiny, text_color=MUTED,
+                             wraplength=380, justify="left", anchor="w").grid(
+                    row=2, column=1, sticky="w", pady=(0, 6))
             r += 1
         for n in self.notes:
             ctk.CTkLabel(self.checks_frame, text=f"ⓘ  {n}", font=self.f_small,
