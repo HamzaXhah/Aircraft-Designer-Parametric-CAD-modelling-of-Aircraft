@@ -1,7 +1,9 @@
-# Parametric Aircraft for SolidWorks
+# Parametric Aircraft for SolidWorks and CATIA V5
+One difference from SolidWorks. CATIA's automation interface won't accept a single point as a loft section, so the fuselage can't loft from a nose-tip point the way it does in SolidWorks. Every variant I tried failed. Instead, the fuselage starts at a tiny section about 1% of the maximum width, taken from the same body shape, and a pointed tail end is closed the same way. That's what causes the 0.26% volume difference.
 
 Design a complete fixed-wing aircraft (wing, fuselage and tail) from one
-configuration file and build it in SolidWorks as a single solid body. You can
+configuration file and build it in **SolidWorks or CATIA V5** as a single solid
+body. The same configuration gives the same aircraft in either system. You can
 edit every parameter in a desktop GUI with live validation and a three-view
 preview. A design sweep can generate whole families of aircraft. Only designs
 that satisfy every parameter limit and every cross-component rule are built.
@@ -27,6 +29,7 @@ that satisfy every parameter limit and every cross-component rule are built.
 - [Design sweep](#design-sweep)
 - [Command-line reference](#command-line-reference)
 - [The SolidWorks model](#the-solidworks-model)
+- [The CATIA model](#the-catia-model)
 - [Using the component scripts on their own](#using-the-component-scripts-on-their-own)
 - [Extending the project](#extending-the-project)
 - [Troubleshooting](#troubleshooting)
@@ -60,12 +63,18 @@ that satisfy every parameter limit and every cross-component rule are built.
   - rendered formulas for each parameter and rule;
   - a three-view preview that always fits the complete aircraft;
   - light and dark themes.
+- **Two CAD systems.** Choose SolidWorks or CATIA V5 in the GUI (or with
+  `--cad` on the command line). Both builders use the same section geometry
+  and the same workflow: loft the wing and mirror it, loft the fuselage, loft
+  each tail panel, merge everything into one solid, record every parameter,
+  save.
 - **Design sweep.** Iterate any parameters (min, max, number of iterations, or
   a list of options) by full grid, linked or Latin-hypercube sampling. Export
-  the valid designs and build them all in SolidWorks.
+  the valid designs and build them all in the chosen CAD system.
 - **Re-runnable models.** Re-building in the same part deletes the previous
   aircraft first, so the model always follows the parameters. Every parameter
-  and derived value is also written into SolidWorks as a global variable.
+  and derived value is also written into the part (SolidWorks global variables
+  or CATIA parameters).
 
 ---
 
@@ -73,10 +82,10 @@ that satisfy every parameter limit and every cross-component rule are built.
 
 | | |
 |---|---|
-| OS | Windows (SolidWorks automation uses COM). Validation, preview and the sweep also run without SolidWorks. |
-| SolidWorks | Any recent version, with a **default part template** set (*Tools › Options › System Options › Default Templates*). |
+| OS | Windows (CAD automation uses COM). Validation, preview and the sweep also run without any CAD system. |
+| CAD | **SolidWorks** (any recent version, with a **default part template** set in *Tools › Options › System Options › Default Templates*) and/or **CATIA V5** (tested on V5-6R2022; Part Design and Generative Shape Design licences). You only need the one you build in. |
 | Python | 3.10 or newer (developed with 3.14) |
-| Packages | `numpy`, `matplotlib`, `customtkinter`, `pillow` (GUI) and `pywin32` (SolidWorks), listed in [`requirements.txt`](requirements.txt) |
+| Packages | `numpy`, `matplotlib`, `customtkinter`, `pillow` (GUI) and `pywin32` (CAD automation), listed in [`requirements.txt`](requirements.txt) |
 
 Versions used during development: numpy 2.5.3, matplotlib 3.11.2,
 customtkinter 6.0.0, pillow 12.3.0, pywin32 312.
@@ -117,6 +126,9 @@ python connect.py
 ```
 
 It attaches to a running SolidWorks (or starts one) and prints its revision.
+For CATIA, a running CATIA V5 session is used (or one is started) when you
+build; if CATIA cannot be reached, register it once for automation from an
+administrator prompt with `cnext /regserver` (in CATIA's `win_b64\code\bin`).
 
 ---
 
@@ -135,8 +147,10 @@ python aircraft_gui.py my_uav.json          # or another configuration
 python aircraft_sw.py --check               # validate + full report, no SolidWorks
 python aircraft_sw.py --check --plot        # ... and write aircraft_preview.png
 python aircraft_sw.py                       # build in SolidWorks
+python aircraft_sw.py --cad catia           # build in CATIA V5
 python aircraft_sw.py --set wing.span_mm=4000 --set tail.configuration=v_tail
 python aircraft_sw.py --save C:\work\uav.SLDPRT --new-part
+python aircraft_sw.py --cad catia --save C:\work\uav.CATPart
 ```
 
 **Design sweep:**
@@ -144,6 +158,7 @@ python aircraft_sw.py --save C:\work\uav.SLDPRT --new-part
 ```powershell
 python aircraft_sweep.py run --vary wing.span_mm=3000:4200:5 --vary tail.configuration=conventional,v_tail --out designs
 python aircraft_sweep.py build designs      # one .SLDPRT per valid design
+python aircraft_sweep.py build designs --cad catia   # one .CATPart per valid design
 ```
 
 ---
@@ -154,7 +169,8 @@ python aircraft_sweep.py build designs      # one .SLDPRT per valid design
 |---|---|
 | [`aircraft_config.json`](aircraft_config.json) | **The single source of truth:** all parameters with ranges, the constraint rules and the saved design sweep |
 | [`aircraft_gui.py`](aircraft_gui.py) | Desktop GUI: editing, live checks, preview, design sweep, build and export |
-| [`aircraft_sw.py`](aircraft_sw.py) | Loads and validates the configuration, integrates the three components, evaluates constraints, builds the aircraft in SolidWorks, reports and plots |
+| [`aircraft_sw.py`](aircraft_sw.py) | Loads and validates the configuration, integrates the three components, evaluates constraints, builds the aircraft in SolidWorks (or hands it to the CATIA builder), reports and plots |
+| [`catia_builder.py`](catia_builder.py) | CATIA V5 builder: the same wing, fuselage and tail geometry built in a CATPart through the CATIA COM API; used for the aircraft, the sweep and the component scripts |
 | [`aircraft_sweep.py`](aircraft_sweep.py) | Design sweep engine and CLI: sampling, checking, export, batch build |
 | [`wing_solidworks.py`](wing_solidworks.py) | Wing geometry (planform, airfoils, sections) and SolidWorks wing builder; also usable on its own |
 | [`fuselage_sw.py`](fuselage_sw.py) | Fuselage geometry (body lines, superellipse sections) and SolidWorks fuselage builder; also usable on its own |
@@ -163,7 +179,7 @@ python aircraft_sweep.py build designs      # one .SLDPRT per valid design
 | [`requirements.txt`](requirements.txt) | Python package requirements |
 | [`run_bat.bat`](run_bat.bat) | Windows launcher: sets up `.venv` on the first run, then starts the GUI |
 | `*_preview.png` | Preview images written by the `--plot` options |
-| `*.SLDPRT` | Saved SolidWorks parts |
+| `*.SLDPRT`, `*.CATPart` | Saved SolidWorks / CATIA parts |
 
 The three component modules provide the geometry. `aircraft_sw.py` combines
 them, and the GUI and the sweep both use `aircraft_sw.py`, so every entry
@@ -171,11 +187,15 @@ point applies exactly the same checks.
 
 ```
 aircraft_gui.py ──┐
-                  ├──> aircraft_sw.py ──> wing_solidworks.py
+                  ├──> aircraft_sw.py ──> wing_solidworks.py   (geometry)
 aircraft_sweep.py ┘          │        ──> fuselage_sw.py
                              │        ──> tail_sw.py
-                             └──> SolidWorks (COM, pywin32)
+                             ├──> SolidWorks (COM, pywin32)       --cad solidworks
+                             └──> catia_builder.py ──> CATIA V5   --cad catia
 ```
+
+The geometry (every section point) is computed once in Python; the two
+builders only differ in the CAD API calls that turn it into a solid.
 
 ---
 
@@ -538,12 +558,20 @@ design and says so.
 
 ### Building and exporting (Build & Export page)
 
-- **Always create a new part.** When this is off, the aircraft in the active
-  SolidWorks part is rebuilt in place.
-- **Save part as.** An optional `.SLDPRT` path.
-- **Build aircraft in SolidWorks.** Runs `aircraft_sw.py` with the current
-  values (written to `%TEMP%\aircraft_designer_config.json`) and streams the
-  log into the page.
+- **CAD software.** *SolidWorks* or *CATIA V5*. The same selector is in the
+  sidebar under the page list; both stay in sync. The choice is used by the
+  **Build ▸** button, this page and the design sweep, and is remembered for
+  the next start (`%APPDATA%\AircraftDesigner\settings.json`). If the chosen
+  system is not installed you are warned before a build starts.
+- **Always create a new part.** When this is off, SolidWorks rebuilds the
+  aircraft in the active part, and CATIA builds in the active part only if it
+  is completely empty (a part with anything in it is never changed; a new
+  window opens instead). When it is on, every build opens a new part.
+- **Save part as.** An optional `.SLDPRT` (SolidWorks) or `.CATPart` (CATIA)
+  path. Switching the CAD software changes the extension of a typed path.
+- **Build aircraft in SolidWorks / CATIA V5.** Runs `aircraft_sw.py --cad …`
+  with the current values (written to `%TEMP%\aircraft_designer_config.json`)
+  and streams the log into the page.
 - **Export preview image…** Saves a PNG three-view drawing.
 - **Export report…** Saves a text report: parameters with ranges, derived
   values, constraint results and any issues.
@@ -602,9 +630,10 @@ A sweep is limited to 5000 designs. Checking one design takes about 5 ms.
   - `sweep_summary.csv`: all designs with their status, values, metrics and
     issues;
   - optionally, a preview PNG per design.
-- **Build valid designs in SolidWorks…** exports the designs, then builds each
-  one in a new part. Each part is saved as `design_###.SLDPRT` and closed.
-  Every file is checked again before it is built.
+- **Build valid designs in SolidWorks… / CATIA V5…** exports the designs, then
+  builds each one in a new part of the chosen CAD software. Each part is saved
+  as `design_###.SLDPRT` or `design_###.CATPart` and closed. Every file is
+  checked again before it is built.
 
 ### Sweep from the command line
 
@@ -620,6 +649,7 @@ python aircraft_sweep.py run --vary wing.span_mm=3000:4200:2 --vary fuselage.len
 # build every design_*.json in a folder (one .SLDPRT each)
 python aircraft_sweep.py build designs
 python aircraft_sweep.py build designs --keep-open
+python aircraft_sweep.py build designs --cad catia     # one .CATPart each
 ```
 
 `--vary` takes `SECTION.NAME=MIN:MAX:N` for numbers and `SECTION.NAME=A,B,C`
@@ -635,13 +665,15 @@ for choices or NACA codes.
 |---|---|
 | `--config FILE` | Configuration file (default `aircraft_config.json`) |
 | `--set SECTION.NAME=VALUE` | Override a value; repeatable; still checked against its limits |
-| `--check`, `--dry-run` | Validate and print the report; do not start SolidWorks |
+| `--cad solidworks\|catia` | CAD system to build in (default `solidworks`) |
+| `--check`, `--dry-run` | Validate and print the report; do not start any CAD system |
 | `--plot` | Write `aircraft_preview.png` (three views) |
-| `--save PATH` | Save the part to this `.SLDPRT` path |
-| `--new-part` | Always create a new part instead of rebuilding the active one |
+| `--save PATH` | Save the part to this path: `.SLDPRT` for SolidWorks, `.CATPart` for CATIA (added if missing) |
+| `--new-part` | Always create a new part instead of rebuilding the active one (CATIA: instead of using an empty active part) |
 
 Exit codes: `0` success; `2` configuration rejected (the reasons are listed);
-`1` SolidWorks is not available on this platform.
+`1` CAD automation is not available on this platform, or the part could not be
+saved.
 
 ### `aircraft_sweep.py`: design sweep
 
@@ -654,8 +686,9 @@ Exit codes: `0` success; `2` configuration rejected (the reasons are listed);
 | `--samples N`, `--seed S` | Random sampling settings |
 | `--out DIR` | Write the valid designs and `sweep_summary.csv` |
 | `--previews` | Also write one preview PNG per design |
-| `build DIR` | Build every `design_*.json` in `DIR` into its own `.SLDPRT` |
-| `--keep-open` | Leave the built parts open in SolidWorks |
+| `build DIR` | Build every `design_*.json` in `DIR` into its own part |
+| `--cad solidworks\|catia` | CAD system for `build` (default `solidworks`): `.SLDPRT` or `.CATPart` files |
+| `--keep-open` | Leave the built parts open in the CAD system |
 
 `run` returns `2` when the sweep definition is invalid. `build` returns `1` if
 any design could not be built or saved.
@@ -690,10 +723,59 @@ any design could not be built or saved.
 
 ---
 
+## The CATIA model
+
+Built by [`catia_builder.py`](catia_builder.py) from exactly the same section
+coordinates as the SolidWorks model, in the same coordinate system (X aft from
+the nose tip, Y up, Z spanwise, mm). The steps map one to one:
+
+| Step | SolidWorks | CATIA V5 |
+|---|---|---|
+| Document | New part from the default template | `Documents.Add("Part")` |
+| Section profiles | Sketch on a reference plane per station: upper + lower spline (+ TE line) | 3-D splines through the same points, joined into one closed curve, in a geometrical set |
+| Wing | Loft, then mirror the body about the Front Plane | Multi-sections solid, then *Mirror* of PartBody about the XY plane |
+| Fuselage | Loft from a nose-tip point through the superellipse sections | Multi-sections solid through the same closed sections (see the nose note below) |
+| Tail | One loft per panel side | One multi-sections solid per panel side |
+| Merge | *Merge result* on every loft → one solid body | All solids are added in **PartBody** → one solid |
+| Parameters | Global variables `AC_*` | Real parameters `AC_*` in the parameter set `Aircraft_Parameters` |
+| Clean-up | Hide construction planes | Hide the geometrical sets |
+| Report / save | Mass properties, `SaveAs3` (`.SLDPRT`) | SPA measure (volume, area), `SaveAs` (`.CATPart`) |
+
+- **Model tree.** `PartBody` holds `Wing_Loft`, `Wing_Mirror`,
+  `Fuselage_Loft` and `Tail_Loft_<panel>`. The section curves are in the
+  geometrical sets `Wing_Sections`, `Fus_Sections` and `Tail_Sections` (hidden
+  after the build), with the same names as the SolidWorks sketches
+  (`Wing_Section_0`, `Fus_Section_3`, `Tail_Sk_HStab_R_0`, …). The spline
+  points are kept inside their splines, so the tree stays short.
+- **Which part is used.** The aircraft is built in the active CATPart only if
+  that part is **completely empty** (no features, sketches, bodies,
+  geometrical sets, parameters or relations). Otherwise a new CATPart opens in
+  its own window, so parts with your own work - or an earlier aircraft - are
+  never changed and earlier designs stay open side by side. `--new-part` (or
+  the GUI switch) always opens a new part; the sweep always does. The
+  component scripts use the active part when it is empty or holds only this
+  program's geometry (so `tail_sw.py` can add a tail to a fuselage part).
+- **Nose and tail tip.** CATIA's automation interface does not accept a point
+  as a loft section, so the fuselage starts at a tiny section of the same body
+  law (1 % of the maximum width, at most 0.05 mm from the tip) instead of the
+  tip point. A pointed tail end is closed the same way. The difference to the
+  SolidWorks body is negligible: for the default aircraft the volumes agree
+  within 0.3 % and the surface areas within 0.1 %.
+- **Loft fallback.** If a multi-sections solid cannot be built directly, the
+  builder makes a multi-sections surface and closes it into a solid (*Close
+  Surface*), and says so in the log.
+- **Saving.** The extension `.CATPart` is added if missing, and a file that is
+  not open is overwritten silently. CATIA cannot hold two documents with the
+  same file name, so if that name is already open (for example the window of
+  your previous build), the part is saved under the next free name
+  (`uav_2.CATPart`, `uav_3.CATPart`, …) and the log says so.
+
+---
+
 ## Using the component scripts on their own
 
 Each component script still works independently with its own parameters and
-JSON overrides:
+JSON overrides. Add `--cad catia` to build in CATIA V5 instead of SolidWorks:
 
 ```powershell
 python wing_solidworks.py --dry-run --plot             # wing geometry only + preview
@@ -706,6 +788,10 @@ python fuselage_sw.py --config fuselage.json --dry-run --plot
 python tail_sw.py --list                               # the seven layouts
 python tail_sw.py -c v_tail --tail-arm 1500 --dry-run --plot
 python tail_sw.py --wing-config wing.json --save C:\work\tail.SLDPRT
+
+python wing_solidworks.py --cad catia --save C:\work\wing.CATPart
+python fuselage_sw.py --cad catia --new-part           # fuselage in a new CATPart ...
+python tail_sw.py -c t_tail --cad catia                # ... then the tail into it
 ```
 
 Their `--config` files contain any subset of the dataclass fields
@@ -745,11 +831,13 @@ The GUI sliders, number filters and sweep limits all follow automatically.
 |---|---|
 | *"No default part template set"* | In SolidWorks: *Tools › Options › System Options › Default Templates*, choose a part template. |
 | Cannot connect to SolidWorks | Run `python connect.py`. Start SolidWorks and the terminal as the same Windows user with the same administrator rights. |
+| Cannot connect to CATIA | Start CATIA V5 first, as the same Windows user and with the same administrator rights as the terminal / GUI. If it still fails, register CATIA for automation once: `cnext /regserver` from an administrator prompt in CATIA's `win_b64\code\bin` folder. |
+| CATIA saved `uav_2.CATPart` instead of `uav.CATPart` | A part named `uav.CATPart` was still open in CATIA (usually the previous build). Close that window first if you want to overwrite the file. |
 | *"Configuration rejected – nothing was built"* | The listed parameters or rules are out of range. `python aircraft_sw.py --check` shows every value and constraint. |
 | *"tail arm would be … mm: the tail does not fit behind the wing"* | The fuselage is too short for this wing position and tail size. Make the fuselage longer, move the wing forward (`integration.wing_x_frac`) or reduce the tail size. |
 | *"tail root does not fit inside the tail cone"* | Increase `fuselage.tail_end_height_mm`, reduce `integration.tail_overhang_frac`, or use a thinner tail section. |
 | Build button disabled in the GUI | At least one issue is open. See the Checks tab or the status card. |
-| Save error in a batch build | The target `.SLDPRT` is probably open or locked; close it or choose another folder. |
+| Save error in a batch build | The target `.SLDPRT` / `.CATPart` is probably open or locked; close it or choose another folder. |
 | Components did not merge into one body | Check the intersections in SolidWorks. Usually the wing or tail root is very close to the fuselage surface; adjust `wing_vertical_pos` / `tail_vertical_pos` slightly. |
 | GUI changes not visible | A running GUI keeps the code it was started with. Close and restart it after updating the files. |
 | `run_bat.bat` says Python was not found | Install Python 3.10+ with *"Add python.exe to PATH"*, then run it again. If `.venv` was made with an older Python, delete the `.venv` folder first. |

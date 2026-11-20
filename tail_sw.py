@@ -66,6 +66,7 @@ Usage
     python tail_sw.py -c t_tail --config tail.json
     python tail_sw.py -c y_tail --wing-config wing.json --dry-run --plot
     python tail_sw.py --list                           # show the configurations
+    python tail_sw.py -c h_tail --cad catia            # build in CATIA V5 instead
     python tail_sw.py --new-part --save C:\\work\\tail.SLDPRT
 
 Example tail.json (any subset of TailParams fields):
@@ -837,17 +838,20 @@ def load_params(args) -> TailParams:
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Parametric tail generator for SolidWorks")
+    ap = argparse.ArgumentParser(description="Parametric tail generator for SolidWorks "
+                                             "and CATIA V5")
+    ap.add_argument("--cad", choices=["solidworks", "catia"], default="solidworks",
+                    help="CAD system to build in (default: %(default)s)")
     ap.add_argument("-c", "--configuration", choices=list(CONFIGURATIONS),
                     help="tail configuration")
     ap.add_argument("--config", help="JSON file with TailParams overrides")
     ap.add_argument("--wing-config", help="JSON file with the WingParams used for sizing")
     ap.add_argument("--tail-arm", type=float, help="tail arm l_t [mm]")
     ap.add_argument("--airfoil", help="airfoil .dat file (Selig or Lednicer)")
-    ap.add_argument("--save", help="save the part to this .SLDPRT path")
+    ap.add_argument("--save", help="save the part to this .SLDPRT / .CATPart path")
     ap.add_argument("--new-part", action="store_true",
                     help="always create a new part instead of using the active one")
-    ap.add_argument("--dry-run", action="store_true", help="geometry only, no SolidWorks")
+    ap.add_argument("--dry-run", action="store_true", help="geometry only, no CAD")
     ap.add_argument("--plot", action="store_true", help="save tail_preview.png")
     ap.add_argument("--list", action="store_true", help="list the configurations and exit")
     args = ap.parse_args(argv)
@@ -872,8 +876,14 @@ def main(argv=None):
     if args.dry_run:
         return 0
     if sys.platform != "win32":
-        print("SolidWorks automation needs Windows; use --dry-run elsewhere.")
+        print("CAD automation needs Windows; use --dry-run elsewhere.")
         return 1
+    if args.cad == "catia":
+        import catia_builder as C
+        saved = C.build_component(
+            "tail", lambda cp: C.build_tail(cp, sections), p, args.save,
+            reuse="never" if args.new_part else "project")
+        return 0 if saved else 1
     SolidWorksTailBuilder(new_part=args.new_part).build(p, lay, sections, args.save)
     return 0
 

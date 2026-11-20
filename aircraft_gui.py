@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Aircraft Designer - CustomTkinter GUI for the parametric SolidWorks aircraft
-============================================================================
+Aircraft Designer - CustomTkinter GUI for the parametric aircraft (SolidWorks / CATIA V5)
+==========================================================================================
 
 Edit every wing, fuselage, tail and placement parameter of
 aircraft_config.json in one window:
@@ -16,15 +16,16 @@ aircraft_config.json in one window:
     three-view preview; parameters involved in a violated rule are marked
   * parameters that do not apply to the chosen tail layout are disabled
   * open / save configurations, export a report or preview image, and build
-    the model in SolidWorks (only when every rule is satisfied)
+    the model in SolidWorks or CATIA V5 - pick the CAD software in the
+    sidebar or on the Build page (only when every rule is satisfied)
   * design sweep: press 'Iterate' on any parameter to vary it between a
     min and max with a number of iterations (or over a list of options);
     all other parameters stay fixed. Every generated design is checked
     against the parameter limits and all cross-component rules, and only
-    valid designs are exported / built in SolidWorks.
+    valid designs are exported / built in the chosen CAD software.
 
 Run:   python aircraft_gui.py [config.json]
-Needs: customtkinter, matplotlib, numpy (+ pywin32 and SolidWorks to build)
+Needs: customtkinter, matplotlib, numpy (+ pywin32 and SolidWorks or CATIA V5 to build)
 """
 
 from __future__ import annotations
@@ -108,6 +109,43 @@ _tune_customtkinter()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_NAME = "Aircraft Designer"
+SETTINGS_FILE = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"),
+                             "AircraftDesigner", "settings.json")
+CAD_BY_LABEL = {label: key for key, (label, _) in A.CAD_SYSTEMS.items()}
+NEW_PART_TEXT = {
+    "solidworks": "Always create a new part (otherwise the aircraft in the active part "
+                  "is rebuilt)",
+    "catia": "Always create a new part (otherwise an empty active part is used; a part "
+             "with content is never changed)",
+}
+CAD_NOTES = {
+    "solidworks": "SolidWorks: sketches on reference planes, lofts merged into one body, "
+                  "global variables AC_*. Saved as .SLDPRT.",
+    "catia": "CATIA V5: 3-D section curves in geometrical sets, multi-sections solids in "
+             "PartBody, parameter set Aircraft_Parameters (AC_*). Builds in the active part "
+             "only if it is empty, otherwise in a new window. Saved as .CATPart.",
+}
+
+
+def load_settings() -> dict:
+    """Per-user GUI preferences (the chosen CAD software); {} if none yet."""
+    try:
+        with open(SETTINGS_FILE) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(**values):
+    data = load_settings()
+    data.update(values)
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, "w") as fh:
+            json.dump(data, fh, indent=2)
+    except OSError:
+        pass                              # a preference only - never fail on it
 
 # ---- colours (light, dark) ---------------------------------------------------
 OK = ("#1f9d55", "#34d399")
@@ -133,7 +171,7 @@ PAGE_SUBTITLES = {
     "constraints": "Cross-component rules - evaluated live, all must pass to build",
     "sweep": "Generate a family of designs by iterating selected parameters - "
              "only designs that pass every rule are kept",
-    "build": "Check, export and build the complete aircraft in SolidWorks",
+    "build": "Check, export and build the complete aircraft in SolidWorks or CATIA V5",
 }
 
 # Formulas shown under a parameter's description:
@@ -1297,6 +1335,10 @@ class AircraftDesigner(ctk.CTk):
         self.last = None                 # (cfg, ac, results) of the last valid analysis
         self.issues, self.results, self.notes, self.current_ac = [], [], [], None
         self.proc, self.log_queue, self.run_target = None, queue.Queue(), None
+        cad = load_settings().get("cad", A.DEFAULT_CAD)
+        self.cad = cad if cad in A.CAD_SYSTEMS else A.DEFAULT_CAD
+        self.cad_label_var = tk.StringVar(value=A.cad_label(self.cad))
+        self.run_cad = self.cad           # CAD software of the running / last build
         self.sweep_designs, self.sweep_base, self.sweep_used = [], None, []
         self.sweep_base_key, self.sweep_thread, self.sweep_q = None, None, queue.Queue()
         self.sweep_stop = threading.Event()
@@ -1371,7 +1413,7 @@ class AircraftDesigner(ctk.CTk):
         sb.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(sb, text="✈  " + APP_NAME, font=self.f_big).grid(
             row=0, column=0, padx=18, pady=(22, 0), sticky="w")
-        ctk.CTkLabel(sb, text="Parametric SolidWorks aircraft", font=self.f_small,
+        ctk.CTkLabel(sb, text="Parametric aircraft for CAD", font=self.f_small,
                      text_color=MUTED).grid(row=1, column=0, padx=18, pady=(0, 18), sticky="w")
         self.nav, self.badges = {}, {}
         for i, (key, title) in enumerate(PAGES):
@@ -1387,6 +1429,11 @@ class AircraftDesigner(ctk.CTk):
                                  fg_color=ERR, text_color="white", font=self.f_tiny)
             self.nav[key], self.badges[key] = b, badge
 
+        ctk.CTkFrame(sb, height=1, fg_color=NAV_SEL).grid(
+            row=26, column=0, sticky="ew", padx=16, pady=(10, 6))
+        ctk.CTkLabel(sb, text="CAD software", font=self.f_small, text_color=MUTED).grid(
+            row=27, column=0, padx=18, sticky="w")
+        self.cad_switch(sb).grid(row=28, column=0, padx=14, pady=(2, 6), sticky="ew")
         sb.grid_rowconfigure(30, weight=1)
         files = ctk.CTkFrame(sb, fg_color="transparent")
         files.grid(row=31, column=0, sticky="ew", padx=10)
@@ -1976,7 +2023,8 @@ class AircraftDesigner(ctk.CTk):
         self.sw_export_btn = self._ghost_button(btns, "Export valid designs…",
                                                 self.export_designs)
         self.sw_export_btn.pack(side="left", padx=4)
-        self.sw_build_btn = ctk.CTkButton(btns, text="Build valid designs in SolidWorks…",
+        self.sw_build_btn = ctk.CTkButton(btns, text=f"Build valid designs in "
+                                                     f"{A.cad_label(self.cad)}…",
                                           height=32, command=self.build_designs)
         self.sw_build_btn.pack(side="left", padx=4)
         self.sw_png = tk.BooleanVar(value=False)
@@ -2454,45 +2502,56 @@ class AircraftDesigner(ctk.CTk):
         valid = [d for d in self.sweep_designs if d.ok]
         if not valid or (self.proc is not None and self.proc.poll() is None):
             return
-        folder = self._pick_folder("Folder for the design files and SolidWorks parts")
+        if not self._check_cad():
+            return
+        cad, label = self.cad, A.cad_label(self.cad)
+        folder = self._pick_folder(f"Folder for the design files and {label} parts")
         if not folder:
             return
         if not messagebox.askyesno(
-                APP_NAME, f"Build {len(valid)} aircraft in SolidWorks?\n\nEach design is built "
-                          f"in a new part, saved as design_###.SLDPRT in\n{folder}\nand closed "
-                          "again. Only designs that pass every rule are built."):
+                APP_NAME, f"Build {len(valid)} aircraft in {label}?\n\nEach design is built "
+                          f"in a new part, saved as design_###{A.cad_extension(cad)} in\n"
+                          f"{folder}\nand closed again. Only designs that pass every rule "
+                          "are built."):
             return
         if not self._write_designs(folder):
             return
-        cmd = [sys.executable, "-u", os.path.join(HERE, "aircraft_sweep.py"), "build", folder]
+        cmd = [sys.executable, "-u", os.path.join(HERE, "aircraft_sweep.py"), "build", folder,
+               "--cad", cad]
         self.sw_view.set("Build log")
         self._sweep_view("Build log")
         self._start_process(cmd, self.sw_log, self.sw_progress, "sweep",
-                            f"Building {len(valid)} designs in SolidWorks…")
+                            f"Building {len(valid)} designs in {label}…")
 
     def _fill_build_page(self, page):
         c1 = ctk.CTkFrame(page, fg_color=CARD, corner_radius=12)
         c1.grid(row=0, column=0, sticky="ew", pady=(0, 12), padx=(0, 6))
         c1.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(c1, text="SOLIDWORKS", font=self.f_tiny, text_color=ACCENT).grid(
+        ctk.CTkLabel(c1, text="CAD BUILD", font=self.f_tiny, text_color=ACCENT).grid(
             row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(10, 4))
+        ctk.CTkLabel(c1, text="CAD software", font=self.f_body).grid(row=1, column=0,
+                                                                     sticky="w", padx=16)
+        self.cad_switch(c1).grid(row=1, column=1, sticky="w", padx=8, pady=6)
+        self.cad_note = ctk.CTkLabel(c1, text="", font=self.f_small, text_color=MUTED,
+                                     anchor="w", justify="left", wraplength=560)
+        self.cad_note.grid(row=2, column=0, columnspan=3, sticky="w", padx=16)
         self.new_part_var = tk.BooleanVar(value=False)
-        ctk.CTkSwitch(c1, text="Always create a new part (otherwise the aircraft in the "
-                               "active part is rebuilt)", variable=self.new_part_var,
-                      font=self.f_body).grid(row=1, column=0, columnspan=3, sticky="w",
-                                             padx=16, pady=6)
-        ctk.CTkLabel(c1, text="Save part as", font=self.f_body).grid(row=2, column=0,
+        self.new_part_switch = ctk.CTkSwitch(
+            c1, text=NEW_PART_TEXT[self.cad], variable=self.new_part_var, font=self.f_body)
+        self.new_part_switch.grid(row=3, column=0, columnspan=3, sticky="w", padx=16, pady=6)
+        ctk.CTkLabel(c1, text="Save part as", font=self.f_body).grid(row=4, column=0,
                                                                      sticky="w", padx=16)
         self.save_part_var = tk.StringVar()
-        ctk.CTkEntry(c1, textvariable=self.save_part_var,
-                     placeholder_text="optional .SLDPRT path").grid(row=2, column=1, sticky="ew",
-                                                                    padx=8, pady=6)
+        self.save_part_entry = ctk.CTkEntry(
+            c1, textvariable=self.save_part_var,
+            placeholder_text=f"optional {A.cad_extension(self.cad)} path")
+        self.save_part_entry.grid(row=4, column=1, sticky="ew", padx=8, pady=6)
         ctk.CTkButton(c1, text="Browse…", width=80, command=self._browse_part).grid(
-            row=2, column=2, padx=(0, 16))
+            row=4, column=2, padx=(0, 16))
         btns = ctk.CTkFrame(c1, fg_color="transparent")
-        btns.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(10, 14))
-        self.build_btn = ctk.CTkButton(btns, text="Build aircraft in SolidWorks", height=40,
-                                       font=self.f_label, command=self.build)
+        btns.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(10, 14))
+        self.build_btn = ctk.CTkButton(btns, text=f"Build aircraft in {A.cad_label(self.cad)}",
+                                       height=40, font=self.f_label, command=self.build)
         self.build_btn.pack(side="left", padx=4)
         ctk.CTkButton(btns, text="Export preview image…", height=40, fg_color="transparent",
                       border_width=1, text_color=("gray10", "gray90"),
@@ -2512,6 +2571,7 @@ class AircraftDesigner(ctk.CTk):
         self.log = ctk.CTkTextbox(c2, height=380, font=self.f_mono, wrap="none")
         self.log.grid(row=2, column=0, sticky="ew", padx=12, pady=(8, 14))
         self.log.insert("end", "Press 'Build' to generate the aircraft. Output appears here.\n")
+        self._update_cad_widgets()
 
     # ---------------------------------------------------------------- model I/O
     def load(self, path):
@@ -2602,7 +2662,8 @@ class AircraftDesigner(ctk.CTk):
 
     def on_close(self):
         if self.proc is not None and self.proc.poll() is None:
-            if not messagebox.askyesno(APP_NAME, "A SolidWorks build is still running. Quit?"):
+            if not messagebox.askyesno(APP_NAME, f"A {A.cad_label(self.run_cad)} build is "
+                                                 "still running. Quit?"):
                 return
         if self.confirm_discard():
             self.destroy()
@@ -3082,11 +3143,63 @@ class AircraftDesigner(ctk.CTk):
 
     # ---------------------------------------------------------------- export / build
     def _browse_part(self):
-        path = filedialog.asksaveasfilename(title="Save SolidWorks part as",
-                                            defaultextension=".SLDPRT",
-                                            filetypes=[("SolidWorks part", "*.SLDPRT")])
+        label, ext = A.CAD_SYSTEMS[self.cad]
+        path = filedialog.asksaveasfilename(title=f"Save {label} part as",
+                                            defaultextension=ext,
+                                            filetypes=[(f"{label} part", f"*{ext}")])
         if path:
             self.save_part_var.set(os.path.normpath(path))
+
+    # ---------------------------------------------------------------- CAD choice
+    def cad_switch(self, parent):
+        """SolidWorks / CATIA selector; every copy shares one variable."""
+        return ctk.CTkSegmentedButton(parent, values=list(CAD_BY_LABEL),
+                                      variable=self.cad_label_var, command=self.set_cad)
+
+    def set_cad(self, label):
+        cad = CAD_BY_LABEL.get(label, A.DEFAULT_CAD)
+        if cad == self.cad:
+            return
+        self.cad = cad
+        save_settings(cad=cad)
+        # keep a typed save path, but give it the extension of the new CAD system
+        var = getattr(self, "save_part_var", None)
+        path = var.get().strip() if var is not None else ""
+        if path:
+            root, ext = os.path.splitext(path)
+            if ext.lower() in {e.lower() for _, e in A.CAD_SYSTEMS.values()}:
+                var.set(root + A.cad_extension(cad))
+        self._update_cad_widgets()
+        installed = sys.platform == "win32" and A.cad_installed(cad)
+        self.flash(f"Models will be built in {A.cad_label(cad)}."
+                   + ("" if installed else f" {A.cad_label(cad)} does not seem to be "
+                                           "installed on this computer."),
+                   "info" if installed else "warn")
+
+    def _update_cad_widgets(self):
+        label, ext = A.CAD_SYSTEMS[self.cad]
+        for name, text in (("build_btn", f"Build aircraft in {label}"),
+                           ("sw_build_btn", f"Build valid designs in {label}…")):
+            w = getattr(self, name, None)
+            if w is not None and w.winfo_exists():
+                w.configure(text=text)
+        entry = getattr(self, "save_part_entry", None)
+        if entry is not None and entry.winfo_exists():
+            entry.configure(placeholder_text=f"optional {ext} path")
+        note = getattr(self, "cad_note", None)
+        if note is not None and note.winfo_exists():
+            note.configure(text=CAD_NOTES[self.cad])
+        sw = getattr(self, "new_part_switch", None)
+        if sw is not None and sw.winfo_exists():
+            sw.configure(text=NEW_PART_TEXT[self.cad])
+
+    def _check_cad(self) -> bool:
+        if sys.platform == "win32" and not A.cad_installed(self.cad):
+            return messagebox.askyesno(
+                APP_NAME, f"{A.cad_label(self.cad)} does not seem to be installed or "
+                          "registered for automation on this computer.\n\nTry to build "
+                          "anyway?")
+        return True
 
     def export_image(self):
         if self.last is None:
@@ -3122,19 +3235,24 @@ class AircraftDesigner(ctk.CTk):
             return
         if self.proc is not None and self.proc.poll() is None:
             return
+        if not self._check_cad():
+            return
         self.show_page("build")
         tmp = os.path.join(tempfile.gettempdir(), "aircraft_designer_config.json")
         with open(tmp, "w") as fh:
             fh.write(dump_config(self.raw))
-        cmd = [sys.executable, "-u", os.path.join(HERE, "aircraft_sw.py"), "--config", tmp]
+        cmd = [sys.executable, "-u", os.path.join(HERE, "aircraft_sw.py"), "--config", tmp,
+               "--cad", self.cad]
         if self.new_part_var.get():
             cmd.append("--new-part")
         if self.save_part_var.get().strip():
             cmd += ["--save", self.save_part_var.get().strip()]
-        self._start_process(cmd, self.log, self.progress, "single", "Building in SolidWorks…")
+        self._start_process(cmd, self.log, self.progress, "single",
+                            f"Building in {A.cad_label(self.cad)}…")
 
     def _start_process(self, cmd, log, progress, kind, message):
-        """Run a SolidWorks build script and stream its output into `log`."""
+        """Run a CAD build script and stream its output into `log`."""
+        self.run_cad = self.cad
         log.delete("1.0", "end")
         log.insert("end", "> " + " ".join(os.path.basename(c) if i < 3 else c
                                          for i, c in enumerate(cmd)) + "\n")
@@ -3186,11 +3304,11 @@ class AircraftDesigner(ctk.CTk):
             progress.configure(mode="determinate")
             progress.set(1 if ok else 0)
         if kind == "sweep":
-            self.flash("All designs built in SolidWorks." if ok else
+            self.flash(f"All designs built in {A.cad_label(self.run_cad)}." if ok else
                        "Some designs could not be built - see the build log.",
                        "ok" if ok else "warn")
         else:
-            self.flash("Aircraft built in SolidWorks." if ok
+            self.flash(f"Aircraft built in {A.cad_label(self.run_cad)}." if ok
                        else f"Build failed (exit code {self.proc.returncode}) - see the log.",
                        "ok" if ok else "warn")
         self.update_views()

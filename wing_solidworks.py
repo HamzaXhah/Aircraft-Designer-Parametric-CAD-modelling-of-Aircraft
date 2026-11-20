@@ -48,6 +48,7 @@ Usage
     python wing_solidworks.py --airfoil sd7062.dat     # your airfoil file
     python wing_solidworks.py --config wing.json       # parameters from JSON
     python wing_solidworks.py --dry-run --plot         # geometry check only, no SolidWorks
+    python wing_solidworks.py --cad catia              # build in CATIA V5 instead
     python wing_solidworks.py --save C:\\work\\wing.SLDPRT
 
 Example wing.json (any subset of WingParams fields):
@@ -604,11 +605,14 @@ def load_params(args) -> WingParams:
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Parametric wing generator for SolidWorks")
+    ap = argparse.ArgumentParser(description="Parametric wing generator for SolidWorks "
+                                             "and CATIA V5")
+    ap.add_argument("--cad", choices=["solidworks", "catia"], default="solidworks",
+                    help="CAD system to build in (default: %(default)s)")
     ap.add_argument("--config", help="JSON file with WingParams overrides")
     ap.add_argument("--airfoil", help="airfoil .dat file (Selig or Lednicer)")
-    ap.add_argument("--save", help="save the part to this .SLDPRT path")
-    ap.add_argument("--dry-run", action="store_true", help="geometry only, no SolidWorks")
+    ap.add_argument("--save", help="save the part to this .SLDPRT / .CATPart path")
+    ap.add_argument("--dry-run", action="store_true", help="geometry only, no CAD")
     ap.add_argument("--plot", action="store_true", help="save a 3-D preview PNG")
     ap.add_argument("--export", metavar="DIR", help="write section XYZ files to DIR")
     args = ap.parse_args(argv)
@@ -630,8 +634,14 @@ def main(argv=None):
         return 0
 
     if sys.platform != "win32":
-        print("SolidWorks automation needs Windows; use --dry-run elsewhere.")
+        print("CAD automation needs Windows; use --dry-run elsewhere.")
         return 1
+    if args.cad == "catia":                          # same sections, CATIA V5 builder
+        import catia_builder as C
+        saved = C.build_component(
+            "wing", lambda cp: C.build_wing(cp, sections, mirror=p.mirror), p, args.save,
+            reuse="empty")
+        return 0 if saved else 1
     SolidWorksWingBuilder(visible=True).build(p, pf, sections, args.save)
     return 0
 

@@ -1,4 +1,4 @@
-# Parametric Aircraft for SolidWorks - Python dependencies
+# Parametric Aircraft for SolidWorks and CATIA V5 - Python dependencies
 # Install with:  pip install -r requirements.txt   (or just run run_bat.bat)
 #
 # Tested with Python 3.14 and: numpy 2.5.3, matplotlib 3.11.2,
@@ -14,5 +14,5 @@ matplotlib>=3.7
 customtkinter>=5.2
 pillow>=10.0
 
-# SolidWorks automation through COM (Windows only; not needed for --check / previews)
+# SolidWorks / CATIA V5 automation through COM (Windows only; not needed for --check / previews)
 pywin32>=306; sys_platform == "win32"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Complete parametric aircraft for SolidWorks: wing + fuselage + tail
-===================================================================
+Complete parametric aircraft for SolidWorks and CATIA V5: wing + fuselage + tail
+================================================================================
 
 Reads ONE configuration file (aircraft_config.json) that defines every
 geometric parameter of the three components, each with its own [min, max]
@@ -21,24 +21,29 @@ range, plus cross-component constraints. It then
                    height is solved so the root fits inside the tail cone
 3. evaluates every constraint expression from the configuration on the
    parameters and the derived geometry (tail arm, wing-tail gap, root fits, ...)
-4. builds the aircraft in a single SolidWorks part only if nothing is
-   violated: wing loft + mirror, fuselage loft, tail lofts, all merged into
-   one solid body. Re-running in the same part deletes the previous aircraft
-   first, so the model always follows the configuration.
+4. builds the aircraft in a single part only if nothing is violated - in
+   SolidWorks (default) or CATIA V5 (--cad catia): wing loft + mirror,
+   fuselage loft, tail lofts, all merged into one solid body. Re-running in
+   the same part deletes the previous aircraft first, so the model always
+   follows the configuration.
 
 The geometry itself comes from wing_solidworks.py, fuselage_sw.py and
-tail_sw.py, which still work on their own.
+tail_sw.py, which still work on their own. The CATIA builder is in
+catia_builder.py and uses exactly the same geometry.
 
 Usage
 -----
     python aircraft_sw.py                               # build from aircraft_config.json
+    python aircraft_sw.py --cad catia                   # build in CATIA V5 instead
     python aircraft_sw.py --check                       # validate + report only
     python aircraft_sw.py --dry-run --plot              # report + aircraft_preview.png
     python aircraft_sw.py --set wing.span_mm=3400 --set tail.configuration=v_tail
     python aircraft_sw.py --config my_uav.json --save C:\\work\\uav.SLDPRT
+    python aircraft_sw.py --cad catia --save C:\\work\\uav.CATPart
     python aircraft_sw.py --new-part                    # never reuse the active part
 
-Requires: Windows, SolidWorks, pywin32, numpy (matplotlib optional for --plot)
+Requires: Windows, SolidWorks or CATIA V5, pywin32, numpy
+          (matplotlib optional for --plot)
 """
 
 from __future__ import annotations
@@ -526,8 +531,64 @@ def hard_checks(ac: Aircraft) -> list[str]:
 AIRCRAFT_PREFIXES = ("Wing_", "Fus_", "Fuselage_", "Tail_")
 EQ_PREFIX = "AC_"
 
+# CAD systems the aircraft can be built in: key -> (display name, part extension)
+CAD_SYSTEMS = {
+    "solidworks": ("SolidWorks", ".SLDPRT"),
+    "catia": ("CATIA V5", ".CATPart"),
+}
+DEFAULT_CAD = "solidworks"
+
+
+def cad_label(cad: str) -> str:
+    return CAD_SYSTEMS[cad][0]
+
+
+def cad_extension(cad: str) -> str:
+    return CAD_SYSTEMS[cad][1]
+
+
+CAD_PROGIDS = {"solidworks": "SldWorks.Application", "catia": "CATIA.Application"}
+
+
+def cad_installed(cad: str) -> bool:
+    """True if the CAD system is registered for COM automation (Windows)."""
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, CAD_PROGIDS[cad]))
+        return True
+    except (ImportError, OSError, KeyError):
+        return False
+
+
+def make_builder(cad: str = DEFAULT_CAD, new_part: bool = False):
+    """Builder for the chosen CAD system. Both have the same interface:
+    build(cfg, ac, save_path) -> saved, save_as(path), close(), .model"""
+    if cad not in CAD_SYSTEMS:
+        raise ValueError(f"Unknown CAD system '{cad}'. Choose from: {', '.join(CAD_SYSTEMS)}")
+    if cad == "catia":
+        from catia_builder import CatiaAircraftBuilder
+        return CatiaAircraftBuilder(new_part=new_part)
+    return SolidWorksAircraftBuilder(new_part=new_part)
+
+
+def equation_values(cfg: Config, ac: Aircraft) -> dict:
+    """Every free numeric parameter and derived value as {AC_<group>_<name>: value}.
+    Written to the part for reference (SolidWorks global variables / CATIA
+    parameters)."""
+    vals = {}
+    for sec, p in cfg.params.items():
+        for k, v in asdict(p).items():
+            if _is_number(v) and k not in DERIVED_FIELDS[sec]:
+                vals[f"{EQ_PREFIX}{sec}_{k}"] = v
+    for k, v in ac.derived.items():
+        vals[f"{EQ_PREFIX}derived_{k}"] = v
+    return vals
+
 
 class SolidWorksAircraftBuilder:
+    label = "SolidWorks"
+    extension = ".SLDPRT"
+
     def __init__(self, new_part: bool = False):
         with contextlib.redirect_stdout(io.StringIO()):
             self.wb = W.SolidWorksWingBuilder(visible=True)
@@ -585,13 +646,7 @@ class SolidWorksAircraftBuilder:
             print(f"Deleted {removed} features of the previous aircraft.")
 
     def write_equations(self, cfg: Config, ac: Aircraft):
-        vals = {}
-        for sec, p in cfg.params.items():
-            for k, v in asdict(p).items():
-                if _is_number(v) and k not in DERIVED_FIELDS[sec]:
-                    vals[f"{EQ_PREFIX}{sec}_{k}"] = v
-        for k, v in ac.derived.items():
-            vals[f"{EQ_PREFIX}derived_{k}"] = v
+        vals = equation_values(cfg, ac)
         try:
             eqm = self._call(self.model, "GetEquationMgr")
             for i in range(self._call(eqm, "GetCount") - 1, -1, -1):
@@ -785,16 +840,20 @@ def plot_aircraft(ac: Aircraft, path: str):
 # =============================================================================
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Parametric aircraft (wing + fuselage + tail) "
-                                             "for SolidWorks")
+                                             "for SolidWorks and CATIA V5")
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="aircraft configuration JSON")
+    ap.add_argument("--cad", choices=list(CAD_SYSTEMS), default=DEFAULT_CAD,
+                    help="CAD system to build in (default: %(default)s)")
     ap.add_argument("--set", action="append", default=[], metavar="SECTION.NAME=VALUE",
                     help="override a parameter value (still checked against min/max)")
     ap.add_argument("--check", "--dry-run", dest="dry_run", action="store_true",
-                    help="validate and report only, no SolidWorks")
+                    help="validate and report only, no CAD")
     ap.add_argument("--plot", action="store_true", help="save aircraft_preview.png")
-    ap.add_argument("--save", help="save the part to this .SLDPRT path")
+    ap.add_argument("--save", help="save the part to this path (.SLDPRT for SolidWorks, "
+                                   ".CATPart for CATIA)")
     ap.add_argument("--new-part", action="store_true",
-                    help="always create a new part instead of rebuilding in the active one")
+                    help="always create a new part instead of rebuilding in the active one "
+                         "(CATIA: instead of using an empty active part)")
     args = ap.parse_args(argv)
 
     try:
@@ -821,10 +880,11 @@ def main(argv=None):
     if args.dry_run:
         return 0
     if sys.platform != "win32":
-        print("SolidWorks automation needs Windows; use --check elsewhere.")
+        print(f"{cad_label(args.cad)} automation needs Windows; use --check elsewhere.")
         return 1
-    SolidWorksAircraftBuilder(new_part=args.new_part).build(cfg, ac, args.save)
-    return 0
+    print(f"Building in {cad_label(args.cad)} ...")
+    saved = make_builder(args.cad, new_part=args.new_part).build(cfg, ac, args.save)
+    return 0 if saved else 1
 
 
 if __name__ == "__main__":

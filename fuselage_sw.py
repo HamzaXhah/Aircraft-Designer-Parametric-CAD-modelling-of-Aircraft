@@ -52,6 +52,7 @@ Usage
     python fuselage_sw.py --dry-run --plot             # geometry check only
     python fuselage_sw.py --save C:\\work\\fuselage.SLDPRT
     python fuselage_sw.py --new-part                   # always start a new part
+    python fuselage_sw.py --cad catia                  # build in CATIA V5 instead
 
 Example fuselage.json (any subset of FuselageParams fields):
     {"length_mm": 4000, "max_width_mm": 420, "max_height_mm": 520,
@@ -721,15 +722,18 @@ def load_params(args) -> FuselageParams:
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Parametric fuselage generator for SolidWorks")
+    ap = argparse.ArgumentParser(description="Parametric fuselage generator for SolidWorks "
+                                             "and CATIA V5")
+    ap.add_argument("--cad", choices=["solidworks", "catia"], default="solidworks",
+                    help="CAD system to build in (default: %(default)s)")
     ap.add_argument("--config", help="JSON file with FuselageParams overrides")
     ap.add_argument("-L", "--length", type=float, help="fuselage length [mm]")
     ap.add_argument("-W", "--width", type=float, help="max width [mm]")
     ap.add_argument("-H", "--height", type=float, help="max height [mm]")
-    ap.add_argument("--save", help="save the part to this .SLDPRT path")
+    ap.add_argument("--save", help="save the part to this .SLDPRT / .CATPart path")
     ap.add_argument("--new-part", action="store_true",
                     help="always create a new part instead of using the active one")
-    ap.add_argument("--dry-run", action="store_true", help="geometry only, no SolidWorks")
+    ap.add_argument("--dry-run", action="store_true", help="geometry only, no CAD")
     ap.add_argument("--plot", action="store_true", help="save fuselage_preview.png")
     args = ap.parse_args(argv)
 
@@ -745,8 +749,14 @@ def main(argv=None):
     if args.dry_run:
         return 0
     if sys.platform != "win32":
-        print("SolidWorks automation needs Windows; use --dry-run elsewhere.")
+        print("CAD automation needs Windows; use --dry-run elsewhere.")
         return 1
+    if args.cad == "catia":
+        import catia_builder as C
+        saved = C.build_component(
+            "fuselage", lambda cp: C.build_fuselage(cp, p, lay, stations), p, args.save,
+            reuse="never" if args.new_part else "project")
+        return 0 if saved else 1
     SolidWorksFuselageBuilder(new_part=args.new_part).build(p, lay, stations, args.save)
     return 0
 

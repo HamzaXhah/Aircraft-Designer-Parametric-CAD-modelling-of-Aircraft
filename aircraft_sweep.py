@@ -25,7 +25,8 @@ The sweep definition is stored in the configuration file under "sweep":
 Usage:
   python aircraft_sweep.py run   [--config FILE] [--vary wing.span_mm=3000:5000:5 ...]
                                  [--mode grid|linked|random] [--samples N] [--out DIR]
-  python aircraft_sweep.py build DIR [--keep-open]     # build every design_*.json in DIR
+  python aircraft_sweep.py build DIR [--keep-open] [--cad solidworks|catia]
+                                                       # build every design_*.json in DIR
 """
 
 from __future__ import annotations
@@ -348,13 +349,14 @@ def write_designs(base: dict, designs, folder, previews=False, progress=None):
     return written, csv_path
 
 
-def build_folder(folder, keep_open=False) -> int:
-    """Build every design_*.json in `folder` into its own SolidWorks part."""
+def build_folder(folder, keep_open=False, cad=A.DEFAULT_CAD) -> int:
+    """Build every design_*.json in `folder` into its own part in the chosen
+    CAD system (design_###.SLDPRT for SolidWorks, design_###.CATPart for CATIA)."""
     files = sorted(glob.glob(os.path.join(folder, "design_*.json")))
     if not files:
         print(f"No design_*.json files in {folder}")
         return 1
-    print(f"Building {len(files)} designs from {folder}")
+    print(f"Building {len(files)} designs from {folder} in {A.cad_label(cad)}")
     builder, failed = None, 0
     for k, path in enumerate(files, 1):
         name = os.path.basename(path)[:-5]
@@ -367,9 +369,9 @@ def build_folder(folder, keep_open=False) -> int:
                 print("  skipped - " + "; ".join(issues))
                 continue
             if builder is None:
-                builder = A.SolidWorksAircraftBuilder(new_part=True)
+                builder = A.make_builder(cad, new_part=True)
             try:
-                saved = builder.build(cfg, ac, os.path.join(folder, name + ".SLDPRT"))
+                saved = builder.build(cfg, ac, os.path.join(folder, name + A.cad_extension(cad)))
             finally:                       # never leave a half-built part open
                 if not keep_open and getattr(builder, "model", None) is not None:
                     try:
@@ -415,13 +417,16 @@ def main(argv=None):
     r.add_argument("--seed", type=int)
     r.add_argument("--out", help="write valid designs + sweep_summary.csv to this folder")
     r.add_argument("--previews", action="store_true", help="also save a preview image per design")
-    b = sub.add_parser("build", help="build every design_*.json of a folder in SolidWorks")
+    b = sub.add_parser("build", help="build every design_*.json of a folder in SolidWorks "
+                                     "or CATIA")
     b.add_argument("folder")
+    b.add_argument("--cad", choices=list(A.CAD_SYSTEMS), default=A.DEFAULT_CAD,
+                   help="CAD system to build in (default: %(default)s)")
     b.add_argument("--keep-open", action="store_true", help="leave the parts open")
     args = ap.parse_args(argv)
 
     if args.cmd == "build":
-        return build_folder(args.folder, args.keep_open)
+        return build_folder(args.folder, args.keep_open, args.cad)
 
     with open(args.config) as fh:
         raw = json.load(fh)
