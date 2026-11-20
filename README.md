@@ -175,6 +175,8 @@ python aircraft_sweep.py build designs --cad catia   # one .CATPart per valid de
 | [`wing_solidworks.py`](wing_solidworks.py) | Wing geometry (planform, airfoils, sections) and SolidWorks wing builder; also usable on its own |
 | [`fuselage_sw.py`](fuselage_sw.py) | Fuselage geometry (body lines, superellipse sections) and SolidWorks fuselage builder; also usable on its own |
 | [`tail_sw.py`](tail_sw.py) | Tail geometry (7 layouts, volume-coefficient sizing) and SolidWorks tail builder; also usable on its own |
+| [`solidworks_api.md`](solidworks_api.md) | Every SolidWorks API call the aircraft build makes, in build order, with a one-line explanation each |
+| [`catia_api.md`](catia_api.md) | Every CATIA V5 API call the aircraft build makes, in build order, with a one-line explanation each |
 | [`connect.py`](connect.py) | Small connection test for the SolidWorks COM interface |
 | [`requirements.txt`](requirements.txt) | Python package requirements |
 | [`run_bat.bat`](run_bat.bat) | Windows launcher: sets up `.venv` on the first run, then starts the GUI |
